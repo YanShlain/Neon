@@ -1,7 +1,7 @@
 # Technical Plan: Flight Booking System (Temporal)
 
 **Architect:** Senior System Architect  
-**Status:** SUPERSEDED — see **[plan.md](../plan.md)** for the canonical architecture  
+**Status:** SUPERSEDED — see **[final_plan.md](final_plan.md)** for the locked canonical architecture  
 **Principles:** S.O.L.I.D, 3-Tier Layering, Temporal Orchestration
 
 > This document was the initial proposal. The full plan now includes: user flow, REST API design, project file structure, seat-map UI rules, workflow signals/queries, timer pattern, and interview-scoped phases.
@@ -10,7 +10,7 @@
 
 ## Quick reference
 
-| Topic | Location in [plan.md](../plan.md) |
+| Topic | Location in [final_plan.md](final_plan.md) |
 |-------|-----------------------------------|
 | User flow & state machine | §2 |
 | 3-tier model & repos | §3 |

@@ -59,7 +59,10 @@ func Connect(ctx context.Context, opts ConnectOptions) (*Runtime, error) {
 func (r *Runtime) StartWorker(seats domain.SeatRepository) worker.Worker {
 	w := worker.New(r.Client, booking.TaskQueue, worker.Options{})
 	w.RegisterWorkflow(booking.BookingWorkflow)
-	w.RegisterActivity(&booking.Activities{Seats: seats})
+	w.RegisterActivity(&booking.Activities{
+		Seats:      seats,
+		PaymentRNG: booking.PaymentRNGFromEnv(),
+	})
 	r.Worker = w
 	return w
 }

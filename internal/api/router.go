@@ -9,7 +9,7 @@ import (
 	"neon/internal/web"
 )
 
-// NewRouter registers MVP-A/B endpoints and static UI.
+// NewRouter registers MVP-A/B/C endpoints and static UI.
 func NewRouter(flights domain.FlightRepository, seats domain.SeatRepository, orders *temporal.OrderService) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
@@ -27,6 +27,7 @@ func NewRouter(flights domain.FlightRepository, seats domain.SeatRepository, ord
 		v1.POST("/orders", oh.CreateOrder)
 		v1.PATCH("/orders/:order_id/seats", oh.UpdateSeats)
 		v1.POST("/orders/:order_id/cancel", oh.CancelOrder)
+		v1.POST("/orders/:order_id/payment", oh.SubmitPayment)
 		v1.GET("/orders/:order_id", oh.GetOrder)
 	}
 	return r

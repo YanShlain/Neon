@@ -367,3 +367,61 @@ body {
   opacity: 0.55;
   color: var(--text-muted);
 }
+
+.panel-title {
+  margin: 0 0 0.5rem;
+  font-size: 1.15rem;
+}
+
+.payment-hint {
+  margin: 0 0 1rem;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.payment-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-width: 20rem;
+}
+
+.payment-form label {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.payment-form input {
+  padding: 0.65rem 0.75rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--surface-2);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 1.25rem;
+  letter-spacing: 0.2em;
+  font-family: inherit;
+}
+
+.payment-feedback {
+  margin-top: 1rem;
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius);
+  font-size: 0.9rem;
+}
+
+.payment-feedback.error {
+  background: var(--error-bg);
+  border: 1px solid var(--error-border);
+  color: var(--error-text);
+}
+
+.payment-feedback.success {
+  background: rgba(34, 197, 94, 0.15);
+  border: 1px solid var(--available);
+  color: #86efac;
+}
+
+.confirmation-panel .confirmation-message {
+  margin: 0 0 1rem;
+  color: var(--text-muted);
+}

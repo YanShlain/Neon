@@ -6,12 +6,13 @@ import (
 )
 
 const (
-	WorkflowName      = "BookingWorkflow"
-	TaskQueue         = "booking-task-queue"
-	Namespace         = "flight-booking"
-	QueryGetStatus    = "GetStatus"
-	UpdateUpdateSeats = "UpdateSeats"
-	UpdateCancelOrder = "CancelOrder"
+	WorkflowName         = "BookingWorkflow"
+	TaskQueue            = "booking-task-queue"
+	Namespace            = "flight-booking"
+	QueryGetStatus       = "GetStatus"
+	UpdateUpdateSeats    = "UpdateSeats"
+	UpdateCancelOrder    = "CancelOrder"
+	SignalSubmitPayment  = "SubmitPayment"
 )
 
 // HoldDuration returns hold timer length (15m default, overridable via HOLD_DURATION).

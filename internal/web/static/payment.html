@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Payment — Neon Air</title>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="container header-inner">
+      <a href="/" class="back-link">← Flights</a>
+      <h1 class="logo">Payment</h1>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="panel order-panel" id="order-panel">
+      <div class="toolbar-row">
+        <div>
+          <p class="order-label">Order <span id="order-id">—</span></p>
+          <p class="order-status">Status: <span id="order-status">—</span></p>
+        </div>
+        <div class="timer-wrap">
+          <span class="timer-label">Hold timer</span>
+          <span id="timer-display" class="timer-display">—</span>
+        </div>
+      </div>
+      <p id="held-seats" class="selection-summary">Held seats: —</p>
+    </section>
+
+    <section class="panel payment-panel" id="payment-panel">
+      <h2 class="panel-title">Enter payment code</h2>
+      <p class="payment-hint">Use a 5-digit numeric code to complete your booking.</p>
+      <form id="payment-form" class="payment-form">
+        <label for="payment-code">Payment code</label>
+        <input
+          id="payment-code"
+          name="code"
+          type="text"
+          inputmode="numeric"
+          pattern="\d{5}"
+          maxlength="5"
+          autocomplete="off"
+          placeholder="12345"
+          required
+        />
+        <button type="submit" id="submit-btn" class="btn btn-primary">Submit payment</button>
+      </form>
+      <p id="payment-feedback" class="payment-feedback hidden" role="status"></p>
+    </section>
+
+    <section id="confirmation-panel" class="panel confirmation-panel hidden">
+      <h2 class="panel-title">Booking confirmed</h2>
+      <p id="confirmation-message" class="confirmation-message"></p>
+      <a id="view-seats-link" class="btn btn-secondary" href="#">View seat map</a>
+    </section>
+
+    <section id="error" class="panel error-panel hidden" role="alert"></section>
+  </main>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/payment.js"></script>
+</body>
+</html>

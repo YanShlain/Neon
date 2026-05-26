@@ -23,7 +23,7 @@ Implement phases **MVP-A → MVP-E** one at a time. After each phase:
 |-------|------|--------|-------|
 | **MVP-A** | Flight catalog + read-only UI | **Done** | U-A1–U-A6, I-A1–I-A4 ✅ |
 | **MVP-B** | Holds, timer, cancel, booking UI | **Done** (user signed off) | U-B1–U-B7, I-B1–I-B5 ✅ |
-| **MVP-C** | Payment happy path | **Next** | U-C1–U-C6, I-C1–I-C3 |
+| **MVP-C** | Payment happy path | **Done** (awaiting manual sign-off) | U-C1–U-C6, I-C1–I-C10 ✅ |
 | **MVP-D** | Payment edge cases | Not started | U-D1–U-D5, I-D1–I-D4 |
 | **MVP-E** | E2E polish | Not started | E-E1–E-E7 |
 
@@ -86,15 +86,52 @@ All MVP-B tests pass (`go test ./...`).
 
 ---
 
-## MVP-C — Next (not started)
+## MVP-C — Complete ✅ (awaiting manual sign-off)
 
 See [final_plan.md](final_plan.md) § MVP-C.
 
-**Backend:** `ValidatePayment`, `ConfirmSeats`, `SubmitPayment` signal, `POST .../payment`, `payment_events` in query.
+### Backend
 
-**UI:** Payment form (5-digit code), submit, status strip, confirmation view.
+| Area | Notes |
+|------|-------|
+| Activities | `ValidatePayment` (5-digit, 10s timeout, 15% failure), `ConfirmSeats` |
+| Workflow | `SubmitPayment` signal; states `SEATS_HELD` → `AWAITING_PAYMENT` → `CONFIRMED`; timer keeps running during payment |
+| Query | `payment_events`, `payment_failures` on `GetStatus` |
+| API | `POST /api/v1/orders/{id}/payment` body `{ "code": "12345" }` |
+| Test hooks | `PAYMENT_FAIL_UNTIL`, `PAYMENT_VALIDATION_DELAY` env vars |
 
-**Tests:** U-C1–U-C6, I-C1–I-C3 (scenario **S-1** happy path via UI/API).
+### UI
+
+- Seat map → **Proceed to payment** when `SEATS_HELD`
+- `/payment` page: 5-digit input, submit, inline feedback, confirmation view
+- Status strip includes `AWAITING_PAYMENT`; timer visible during payment
+
+### Tests
+
+All MVP-C tests pass (`go test ./...`).
+
+| ID | Type | Scenario | Result |
+|----|------|----------|--------|
+| U-C1 | Unit | Pay success → CONFIRMED, BOOKED | ✅ |
+| U-C2 | Unit | Fail once, retry same code → CONFIRMED | ✅ |
+| U-C3 | Unit | 3 failures, 4th rejected | ✅ |
+| U-C4 | Unit | AWAITING_PAYMENT + timer running | ✅ |
+| U-C5 | Unit | Code `1234` format error | ✅ |
+| U-C6 | Unit | Code `abcde` format error | ✅ |
+| I-C1 | Integration | S-1 happy path API | ✅ |
+| I-C2 | Integration | Retry then succeed (3 events) | ✅ |
+| I-C3 | Integration | Timer > 0 during AWAITING_PAYMENT | ✅ |
+| I-C4 | Integration | Invalid code `1234` → HTTP 400 | ✅ |
+| I-C5 | Integration | Invalid code `abcde` → HTTP 400 | ✅ |
+| I-C6 | Integration | Attempt exhaustion → HTTP 400 | ✅ |
+| I-C7 | Integration | Payment on CONFIRMED → HTTP 400 | ✅ |
+| I-C8 | Integration | Unknown order → HTTP 404 | ✅ |
+| I-C9 | Integration | Payment without seats → HTTP 400 | ✅ |
+| I-C10 | Integration | Missing body → HTTP 400 | ✅ |
+
+Manual steps: [manual_tests.md](manual_tests.md).
+
+**Not in scope (MVP-D):** `StartNewPaymentMethod`, timer-vs-payment race rejection, 3×3 method exhaustion.
 
 ---
 
@@ -117,22 +154,14 @@ If port 8080 is busy: `netstat -ano | findstr ":8080"` then `Stop-Process -Id <P
 
 Use this block when onboarding a new agent:
 
-> **Continue Neon on branch `dev`.** MVP-A and MVP-B are complete; user signed off MVP-B manually.  
-> **Next task: MVP-C (payment happy path) only** per `docs/final_plan.md` § MVP-C.  
-> Read `docs/progress.md`, `docs/final_plan.md`, and `docs/final_requierments.md` first.  
-> Extend `BookingWorkflow` with `ValidatePayment`, `ConfirmSeats`, `SubmitPayment`; add `POST /api/v1/orders/{id}/payment` and payment UI.  
-> Implement tests **U-C1–U-C6** and **I-C1–I-C3**; run `go test ./...` before finishing.  
-> **Layering:** Gin handlers → Temporal client only; seat/payment side effects in activities → repository interfaces.  
-> **Process:** one phase at a time; provide manual test steps; **do not start MVP-D until user confirms.**  
-> Commit when tests are green (user will request push separately).
+> **Continue Neon on branch `dev`.** MVP-A, MVP-B, and MVP-C are implemented; MVP-C awaits manual sign-off.  
+> **Next task: MVP-D only** after user confirms MVP-C (see `docs/handoff.md`).  
+> Read `docs/progress.md`, `docs/final_plan.md`, and `docs/handoff.md` first.  
+> **Do not start MVP-D** until the user explicitly approves.
 
-### Suggested first steps
+### MVP-C manual test checklist
 
-1. Read `internal/workflow/booking/workflow.go` and `docs/final_plan.md` §2.5 (workflow signals, payment rules).
-2. Add payment activities with injectable RNG for 15% failure (plan §9 test tooling).
-3. Wire `POST .../payment` in `internal/api/handler/orders.go`.
-4. Add payment page/flow in `internal/web/static/` (after seat confirmation).
-5. Update this file when MVP-C starts/completes.
+See **[manual_tests.md](manual_tests.md)** for UI steps, curl commands, and sign-off checklist.
 
 ### Architecture reminders
 

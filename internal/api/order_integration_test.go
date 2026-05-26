@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"neon/domain"
 	"neon/internal/app"
 	"neon/internal/infrastructure/memory"
 )
@@ -93,6 +94,12 @@ type orderBody struct {
 	Status                string   `json:"status"`
 	HeldSeatIDs           []string `json:"held_seat_ids"`
 	TimerRemainingSeconds int      `json:"timer_remaining_seconds"`
+	PaymentEvents         []struct {
+		Type    string `json:"type"`
+		Code    string `json:"code,omitempty"`
+		Message string `json:"message,omitempty"`
+	} `json:"payment_events"`
+	PaymentFailures int `json:"payment_failures"`
 }
 
 func decodeOrder(t *testing.T, resp *http.Response) orderBody {
@@ -244,4 +251,269 @@ func TestI_B5_HoldConflictReturns409(t *testing.T) {
 		t.Fatalf("order2 patch status = %d, want 409", resp2.StatusCode)
 	}
 	resp2.Body.Close()
+}
+
+func submitPayment(t *testing.T, srv *httptest.Server, orderID, code string) (orderBody, int) {
+	t.Helper()
+	resp := postJSON(t, srv.URL+"/api/v1/orders/"+orderID+"/payment", map[string]string{"code": code})
+	defer resp.Body.Close()
+	var body orderBody
+	if resp.StatusCode == http.StatusOK {
+		body = decodeOrder(t, resp)
+	}
+	return body, resp.StatusCode
+}
+
+func getOrder(t *testing.T, srv *httptest.Server, orderID string) orderBody {
+	t.Helper()
+	resp, err := http.Get(srv.URL + "/api/v1/orders/" + orderID)
+	if err != nil {
+		t.Fatalf("get order: %v", err)
+	}
+	return decodeOrder(t, resp)
+}
+
+// I-C1: S-1 Happy path — CONFIRMED; seat BOOKED
+func TestI_C1_PaymentHappyPath(t *testing.T) {
+	t.Setenv("PAYMENT_NEVER_FAIL", "1")
+	srv, seats := newTestServer(t)
+
+	order := createOrder(t, srv, "101")
+	resp := patchJSON(t, srv.URL+"/api/v1/orders/"+order.OrderID+"/seats", map[string]any{"seat_ids": []string{"1A"}})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("patch status = %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	body, statusCode := submitPayment(t, srv, order.OrderID, "12345")
+	if statusCode != http.StatusOK {
+		t.Fatalf("payment status = %d", statusCode)
+	}
+	if body.Status != "CONFIRMED" {
+		t.Fatalf("status = %q, want CONFIRMED", body.Status)
+	}
+
+	list, err := seats.ListByFlight(t.Context(), "101")
+	if err != nil {
+		t.Fatalf("list seats: %v", err)
+	}
+	for _, seat := range list {
+		if seat.SeatID == "1A" {
+			if seat.Status != domain.SeatStatusBooked {
+				t.Fatalf("1A status = %q, want BOOKED", seat.Status)
+			}
+		}
+	}
+}
+
+// I-C2: Retry then succeed — 3 events; CONFIRMED
+func TestI_C2_PaymentRetryThenSucceed(t *testing.T) {
+	t.Setenv("PAYMENT_FAIL_UNTIL", "2")
+	srv := newTestApp(t)
+
+	order := createOrder(t, srv, "101")
+	resp := patchJSON(t, srv.URL+"/api/v1/orders/"+order.OrderID+"/seats", map[string]any{"seat_ids": []string{"1A"}})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("patch status = %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	for i := 0; i < 2; i++ {
+		body, _ := submitPayment(t, srv, order.OrderID, "12345")
+		if body.Status != "SEATS_HELD" {
+			t.Fatalf("payment %d status = %q, want SEATS_HELD", i+1, body.Status)
+		}
+	}
+
+	body, _ := submitPayment(t, srv, order.OrderID, "12345")
+	if body.Status != "CONFIRMED" {
+		t.Fatalf("final payment status = %q, want CONFIRMED", body.Status)
+	}
+	if len(body.PaymentEvents) < 3 {
+		t.Fatalf("payment_events = %d, want at least 3", len(body.PaymentEvents))
+	}
+}
+
+// I-C3: Timer during payment — Timer > 0 while AWAITING_PAYMENT
+func TestI_C3_TimerDuringPayment(t *testing.T) {
+	t.Setenv("PAYMENT_VALIDATION_DELAY", "2s")
+	srv := newTestApp(t)
+
+	order := createOrder(t, srv, "101")
+	resp := patchJSON(t, srv.URL+"/api/v1/orders/"+order.OrderID+"/seats", map[string]any{"seat_ids": []string{"1A"}})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("patch status = %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	done := make(chan orderBody, 1)
+	go func() {
+		body, _ := submitPayment(t, srv, order.OrderID, "12345")
+		done <- body
+	}()
+
+	time.Sleep(300 * time.Millisecond)
+	getResp, err := http.Get(srv.URL + "/api/v1/orders/" + order.OrderID)
+	if err != nil {
+		t.Fatalf("get order: %v", err)
+	}
+	mid := decodeOrder(t, getResp)
+	if mid.Status != "AWAITING_PAYMENT" {
+		t.Fatalf("mid status = %q, want AWAITING_PAYMENT", mid.Status)
+	}
+	if mid.TimerRemainingSeconds <= 0 {
+		t.Fatalf("timer_remaining_seconds = %d, want > 0", mid.TimerRemainingSeconds)
+	}
+
+	final := <-done
+	if final.Status != "CONFIRMED" {
+		t.Fatalf("final status = %q, want CONFIRMED", final.Status)
+	}
+}
+
+// I-C4: Invalid code 1234 — HTTP 400; order stays SEATS_HELD
+func TestI_C4_InvalidPaymentCodeLengthAPI(t *testing.T) {
+	srv := newTestApp(t)
+
+	order := createOrder(t, srv, "101")
+	resp := patchJSON(t, srv.URL+"/api/v1/orders/"+order.OrderID+"/seats", map[string]any{"seat_ids": []string{"1A"}})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("patch status = %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	_, statusCode := submitPayment(t, srv, order.OrderID, "1234")
+	if statusCode != http.StatusBadRequest {
+		t.Fatalf("payment status = %d, want 400", statusCode)
+	}
+
+	got := getOrder(t, srv, order.OrderID)
+	if got.Status != "SEATS_HELD" {
+		t.Fatalf("status = %q, want SEATS_HELD", got.Status)
+	}
+}
+
+// I-C5: Invalid code abcde — HTTP 400; order stays SEATS_HELD
+func TestI_C5_InvalidPaymentCodeLettersAPI(t *testing.T) {
+	srv := newTestApp(t)
+
+	order := createOrder(t, srv, "101")
+	resp := patchJSON(t, srv.URL+"/api/v1/orders/"+order.OrderID+"/seats", map[string]any{"seat_ids": []string{"1A"}})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("patch status = %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	_, statusCode := submitPayment(t, srv, order.OrderID, "abcde")
+	if statusCode != http.StatusBadRequest {
+		t.Fatalf("payment status = %d, want 400", statusCode)
+	}
+
+	got := getOrder(t, srv, order.OrderID)
+	if got.Status != "SEATS_HELD" {
+		t.Fatalf("status = %q, want SEATS_HELD", got.Status)
+	}
+}
+
+// I-C6: Three failures then fourth rejected — HTTP 400 exhausted
+func TestI_C6_PaymentAttemptsExhaustedAPI(t *testing.T) {
+	t.Setenv("PAYMENT_ALWAYS_FAIL", "1")
+	srv := newTestApp(t)
+
+	order := createOrder(t, srv, "101")
+	resp := patchJSON(t, srv.URL+"/api/v1/orders/"+order.OrderID+"/seats", map[string]any{"seat_ids": []string{"1A"}})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("patch status = %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	for i := 0; i < 3; i++ {
+		body, code := submitPayment(t, srv, order.OrderID, "12345")
+		if code != http.StatusOK {
+			t.Fatalf("attempt %d status = %d, want 200", i+1, code)
+		}
+		if body.Status != "SEATS_HELD" {
+			t.Fatalf("attempt %d order status = %q, want SEATS_HELD", i+1, body.Status)
+		}
+	}
+
+	_, code := submitPayment(t, srv, order.OrderID, "12345")
+	if code != http.StatusBadRequest {
+		t.Fatalf("fourth payment status = %d, want 400", code)
+	}
+}
+
+// I-C7: Payment on CONFIRMED order — HTTP 400 not allowed
+func TestI_C7_PaymentOnConfirmedOrderRejected(t *testing.T) {
+	t.Setenv("PAYMENT_NEVER_FAIL", "1")
+	srv := newTestApp(t)
+
+	order := createOrder(t, srv, "101")
+	resp := patchJSON(t, srv.URL+"/api/v1/orders/"+order.OrderID+"/seats", map[string]any{"seat_ids": []string{"1A"}})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("patch status = %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	body, code := submitPayment(t, srv, order.OrderID, "12345")
+	if code != http.StatusOK || body.Status != "CONFIRMED" {
+		t.Fatalf("first payment status=%d body=%+v", code, body)
+	}
+
+	_, code = submitPayment(t, srv, order.OrderID, "12345")
+	if code != http.StatusBadRequest {
+		t.Fatalf("second payment status = %d, want 400", code)
+	}
+
+	got := getOrder(t, srv, order.OrderID)
+	if got.Status != "CONFIRMED" {
+		t.Fatalf("status = %q, want CONFIRMED", got.Status)
+	}
+}
+
+// I-C8: Unknown order — HTTP 404
+func TestI_C8_PaymentUnknownOrder404(t *testing.T) {
+	srv := newTestApp(t)
+
+	_, code := submitPayment(t, srv, "00000000-0000-0000-0000-000000000099", "12345")
+	if code != http.StatusNotFound {
+		t.Fatalf("payment status = %d, want 404", code)
+	}
+}
+
+// I-C9: Payment without held seats — HTTP 400 not allowed
+func TestI_C9_PaymentWithoutSeatsHeldRejected(t *testing.T) {
+	srv := newTestApp(t)
+
+	order := createOrder(t, srv, "101")
+	_, code := submitPayment(t, srv, order.OrderID, "12345")
+	if code != http.StatusBadRequest {
+		t.Fatalf("payment status = %d, want 400", code)
+	}
+
+	got := getOrder(t, srv, order.OrderID)
+	if got.Status != "CREATED" {
+		t.Fatalf("status = %q, want CREATED", got.Status)
+	}
+}
+
+// I-C10: Missing payment body — HTTP 400
+func TestI_C10_PaymentMissingBody400(t *testing.T) {
+	srv := newTestApp(t)
+
+	order := createOrder(t, srv, "101")
+	resp := patchJSON(t, srv.URL+"/api/v1/orders/"+order.OrderID+"/seats", map[string]any{"seat_ids": []string{"1A"}})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("patch status = %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	emptyResp, err := http.Post(srv.URL+"/api/v1/orders/"+order.OrderID+"/payment", "application/json", bytes.NewReader([]byte("{}")))
+	if err != nil {
+		t.Fatalf("post payment: %v", err)
+	}
+	defer emptyResp.Body.Close()
+	if emptyResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("payment status = %d, want 400", emptyResp.StatusCode)
+	}
 }

@@ -18,6 +18,7 @@
   const refreshBtn = document.getElementById("refresh-btn");
   const confirmBtn = document.getElementById("confirm-btn");
   const cancelBtn = document.getElementById("cancel-btn");
+  const payBtn = document.getElementById("pay-btn");
 
   let selectedSeats = new Set();
   let timerSeconds = 0;
@@ -34,6 +35,9 @@
   refreshBtn.addEventListener("click", () => refreshAll());
   confirmBtn.addEventListener("click", () => confirmSelection());
   cancelBtn.addEventListener("click", () => cancelOrder());
+  if (payBtn) {
+    payBtn.addEventListener("click", () => goToPayment());
+  }
 
   bootstrap();
 
@@ -81,13 +85,32 @@
     startTimer();
     updateSelectionSummary();
 
+    if (payBtn) {
+      payBtn.disabled = !(order.status === "SEATS_HELD" && (order.held_seat_ids || []).length > 0);
+    }
+
+    if (order.status === "CONFIRMED") {
+      setStoredOrderID(null);
+      confirmBtn.disabled = true;
+      if (payBtn) {
+        payBtn.disabled = true;
+      }
+    }
+
     if (isTerminalStatus(order.status)) {
       setStoredOrderID(null);
       confirmBtn.disabled = true;
+      if (payBtn) {
+        payBtn.disabled = true;
+      }
       if (order.status === "CANCELLED" || order.status === "EXPIRED") {
         showError(errorEl, `Order ${order.status.toLowerCase()}. Start a new booking from the flight list.`);
       }
     }
+  }
+
+  function goToPayment() {
+    window.location.href = `/payment?flight_id=${encodeURIComponent(flightID)}&order_id=${encodeURIComponent(orderID)}`;
   }
 
   async function loadSeatMap(id) {
@@ -137,6 +160,9 @@
       timerSeconds = order.timer_remaining_seconds || 0;
       startTimer();
       await loadSeatMap(flightID);
+      if (payBtn) {
+        payBtn.disabled = !(order.status === "SEATS_HELD" && (order.held_seat_ids || []).length > 0);
+      }
     } catch (err) {
       showError(errorEl, err.message);
     } finally {

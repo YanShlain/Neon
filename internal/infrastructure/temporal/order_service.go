@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
 	enumspb "go.temporal.io/api/enums/v1"
@@ -102,6 +103,96 @@ func (s *OrderService) CancelOrder(ctx context.Context, orderID string) (booking
 	return resp, nil
 }
 
+// SubmitPayment signals payment validation and waits for workflow processing.
+func (s *OrderService) SubmitPayment(ctx context.Context, orderID string, code string) (booking.StatusResponse, error) {
+	before, err := s.GetStatus(ctx, orderID)
+	if err != nil {
+		return booking.StatusResponse{}, err
+	}
+	if before.Status.IsTerminal() {
+		if before.Status == domain.OrderStatusConfirmed {
+			return before, ErrPaymentNotAllowed
+		}
+		return before, ErrTerminalOrder
+	}
+	if before.Status != domain.OrderStatusSeatsHeld {
+		return before, ErrPaymentNotAllowed
+	}
+	beforeEvents := len(before.PaymentEvents)
+
+	slog.Info("outbound temporal SignalWorkflow",
+		"signal", booking.SignalSubmitPayment,
+		"order_id", orderID,
+	)
+
+	if err := s.client.SignalWorkflow(ctx, orderID, "", booking.SignalSubmitPayment, booking.SubmitPaymentRequest{
+		Code: code,
+	}); err != nil {
+		slog.Error("SignalWorkflow failed", "order_id", orderID, "error", err, "exc_info", err)
+		return booking.StatusResponse{}, mapTemporalError(err)
+	}
+
+	deadline := time.Now().Add(12 * time.Second)
+	var last booking.StatusResponse
+	for time.Now().Before(deadline) {
+		last, err = s.GetStatus(ctx, orderID)
+		if err != nil {
+			return booking.StatusResponse{}, err
+		}
+		if paymentProcessingSettled(before, last, beforeEvents) {
+			return last, mapPaymentResultError(last)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	return last, fmt.Errorf("payment processing timeout")
+}
+
+func paymentProcessingSettled(before, after booking.StatusResponse, beforeEvents int) bool {
+	if after.Status == domain.OrderStatusConfirmed {
+		return true
+	}
+	if after.Status == domain.OrderStatusAwaitingPayment {
+		return false
+	}
+	if len(after.PaymentEvents) > beforeEvents {
+		return true
+	}
+	if after.Status != before.Status {
+		return true
+	}
+	return false
+}
+
+func mapPaymentResultError(status booking.StatusResponse) error {
+	if err := mapPaymentStatusError(status.LastError); err != nil {
+		return err
+	}
+	if len(status.PaymentEvents) == 0 {
+		return nil
+	}
+	switch status.PaymentEvents[len(status.PaymentEvents)-1].Type {
+	case booking.PaymentEventFormatInvalid:
+		return ErrInvalidPaymentCode
+	case booking.PaymentEventAttemptsExhausted:
+		return ErrPaymentAttemptsExhausted
+	default:
+		return nil
+	}
+}
+
+func mapPaymentStatusError(lastError string) error {
+	switch lastError {
+	case "invalid payment code format":
+		return ErrInvalidPaymentCode
+	case "payment attempts exhausted":
+		return ErrPaymentAttemptsExhausted
+	case "payment not allowed":
+		return ErrPaymentNotAllowed
+	default:
+		return nil
+	}
+}
+
 // GetStatus queries workflow state.
 func (s *OrderService) GetStatus(ctx context.Context, orderID string) (booking.StatusResponse, error) {
 	slog.Info("outbound temporal QueryWorkflow",
@@ -147,6 +238,15 @@ var ErrOrderNotFound = errors.New("order not found")
 
 // ErrTerminalOrder indicates the order is in a terminal state.
 var ErrTerminalOrder = errors.New("order is terminal")
+
+// ErrInvalidPaymentCode indicates the payment code format is invalid.
+var ErrInvalidPaymentCode = errors.New("invalid payment code")
+
+// ErrPaymentAttemptsExhausted indicates too many failures for the current code.
+var ErrPaymentAttemptsExhausted = errors.New("payment attempts exhausted")
+
+// ErrPaymentNotAllowed indicates payment cannot be submitted in the current order state.
+var ErrPaymentNotAllowed = errors.New("payment not allowed")
 
 // DescribeOrderStatus is a helper for HTTP mapping.
 func DescribeOrderStatus(status domain.OrderStatus) string {

@@ -13,6 +13,7 @@ func Register(r *gin.Engine, staticFS fs.FS) {
 	// --- Page routes ---
 	r.GET("/", servePage(staticFS, "index.html"))
 	r.GET("/seats", servePage(staticFS, "seats.html"))
+	r.GET("/payment", servePage(staticFS, "payment.html"))
 
 	// --- Asset routes ---
 	r.GET("/css/*filepath", serveAsset(staticFS, "css"))

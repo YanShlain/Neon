@@ -23,8 +23,8 @@ Implement phases **MVP-A → MVP-E** one at a time. After each phase:
 |-------|------|--------|-------|
 | **MVP-A** | Flight catalog + read-only UI | **Done** | U-A1–U-A6, I-A1–I-A4 ✅ |
 | **MVP-B** | Holds, timer, cancel, booking UI | **Done** (user signed off) | U-B1–U-B7, I-B1–I-B5 ✅ |
-| **MVP-C** | Payment happy path | **Done** (awaiting manual sign-off) | U-C1–U-C6, I-C1–I-C10 ✅ |
-| **MVP-D** | Payment edge cases | Not started | U-D1–U-D5, I-D1–I-D4 |
+| **MVP-C** | Payment happy path | **Done** (user signed off) | U-C1–U-C6, I-C1–I-C10 ✅ |
+| **MVP-D** | Payment edge cases | **Next** (not started) | U-D1–U-D5, I-D1–I-D4 |
 | **MVP-E** | E2E polish | Not started | E-E1–E-E7 |
 
 ---
@@ -86,9 +86,12 @@ All MVP-B tests pass (`go test ./...`).
 
 ---
 
-## MVP-C — Complete ✅ (awaiting manual sign-off)
+## MVP-C — Complete ✅
 
-See [final_plan.md](final_plan.md) § MVP-C.
+**Commit:** `c5a5d29` — `feat(mvp-c): payment happy path with tests and manual guide`  
+**Manual sign-off:** 2026-05-26 (UI + API; happy path, invalid codes, retry)
+
+See [final_plan.md](final_plan.md) § MVP-C. Manual steps: [manual_tests.md](manual_tests.md).
 
 ### Backend
 
@@ -129,9 +132,9 @@ All MVP-C tests pass (`go test ./...`).
 | I-C9 | Integration | Payment without seats → HTTP 400 | ✅ |
 | I-C10 | Integration | Missing body → HTTP 400 | ✅ |
 
-Manual steps: [manual_tests.md](manual_tests.md).
+**Not in scope (deferred to MVP-D):** `StartNewPaymentMethod`, timer-vs-payment race rejection (S-4), 3×3 method exhaustion (S-3).
 
-**Not in scope (MVP-D):** `StartNewPaymentMethod`, timer-vs-payment race rejection, 3×3 method exhaustion.
+**Data note:** Seat inventory is **in-memory only** — restarting `go run ./cmd/api` resets all seats to AVAILABLE (no Postgres yet).
 
 ---
 
@@ -154,14 +157,10 @@ If port 8080 is busy: `netstat -ano | findstr ":8080"` then `Stop-Process -Id <P
 
 Use this block when onboarding a new agent:
 
-> **Continue Neon on branch `dev`.** MVP-A, MVP-B, and MVP-C are implemented; MVP-C awaits manual sign-off.  
-> **Next task: MVP-D only** after user confirms MVP-C (see `docs/handoff.md`).  
+> **Continue Neon on branch `dev`.** MVP-A, MVP-B, and MVP-C are **done and user-signed-off**.  
+> **Next task: MVP-D only** (payment edge cases) — see `docs/handoff.md`.  
 > Read `docs/progress.md`, `docs/final_plan.md`, and `docs/handoff.md` first.  
-> **Do not start MVP-D** until the user explicitly approves.
-
-### MVP-C manual test checklist
-
-See **[manual_tests.md](manual_tests.md)** for UI steps, curl commands, and sign-off checklist.
+> **Do not start MVP-D** until the user explicitly asks for it.
 
 ### Architecture reminders
 
@@ -178,8 +177,10 @@ Temporal: namespace `flight-booking`, task queue `booking-task-queue`.
 ## Git state
 
 ```text
-Branch: dev
+Branch: dev (ahead of origin/dev by 1 commit as of last update)
 Latest commits:
+  c5a5d29 feat(mvp-c): payment happy path with tests and manual guide
+  9adfc25 docs: add agent handoff guide for MVP-C continuation
   6f79c25 feat(mvp-b): add seat holds, timer, cancel, and booking UI
   e18edbf feat(ui): add MVP-A read-only web UI and per-phase UI plan
 ```
@@ -188,7 +189,7 @@ Push when ready: `git push origin dev`
 
 ---
 
-## Future phases (after MVP-C)
+## Next phase — MVP-D (not started)
 
 | Phase | Focus |
 |-------|-------|

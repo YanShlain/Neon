@@ -103,8 +103,9 @@
   }
 
   function updatePayButton(order) {
+    const payableStatus = order.status === "SEATS_HELD" || order.status === "CREATED";
     const canPay =
-      order.status === "SEATS_HELD" &&
+      payableStatus &&
       (order.held_seat_ids || []).length > 0 &&
       !syncInFlight;
     payBtn.disabled = !canPay;

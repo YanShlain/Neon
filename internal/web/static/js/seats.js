@@ -144,8 +144,8 @@
     }
   }
 
-  async function toggleSeat(seatID) {
-    if (syncInFlight || orderStatus === "AWAITING_PAYMENT") {
+  function toggleSeat(seatID) {
+    if (orderStatus === "AWAITING_PAYMENT") {
       return;
     }
     if (selectedSeats.has(seatID)) {
@@ -153,22 +153,12 @@
     } else {
       selectedSeats.add(seatID);
     }
-    renderSeatGrid(gridEl, latestSeats, selectedSeats, toggleSeat, syncInFlight);
+    renderSeatGrid(gridEl, latestSeats, selectedSeats, toggleSeat, false);
     updateSelectionSummary();
-    try {
-      await syncSeatsToServer();
-    } catch (err) {
-      showError(errorEl, err.message);
-      await loadOrder();
-      await loadSeatMap(flightID);
-    }
+    updatePayButton({ status: orderStatus, held_seat_ids: [...selectedSeats] });
   }
 
   function updateSelectionSummary() {
-    if (syncInFlight) {
-      selectionSummary.textContent = "Updating seat hold…";
-      return;
-    }
     if (selectedSeats.size === 0) {
       selectionSummary.textContent = "Click seats to hold them, then proceed to payment.";
       return;
@@ -181,7 +171,6 @@
       return { status: orderStatus, held_seat_ids: [...selectedSeats] };
     }
     syncInFlight = true;
-    updateSelectionSummary();
     payBtn.disabled = true;
     try {
       const payloadSeatIds = [...selectedSeats].sort();
@@ -193,14 +182,10 @@
       orderStatusEl.textContent = order.status;
       timerSeconds = order.timer_remaining_seconds || 0;
       startTimer();
-      await loadSeatMap(flightID);
-      updatePayButton(order);
       return order;
     } finally {
       syncInFlight = false;
-      renderSeatGrid(gridEl, latestSeats, selectedSeats, toggleSeat, syncInFlight);
       updatePayButton({ status: orderStatus, held_seat_ids: [...selectedSeats] });
-      updateSelectionSummary();
     }
   }
 

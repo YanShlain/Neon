@@ -21,13 +21,16 @@
   const paymentCode = document.getElementById("payment-code");
   const paymentFeedback = document.getElementById("payment-feedback");
   const submitBtn = document.getElementById("submit-btn");
-  const newMethodBtn = document.getElementById("new-method-btn");
   const errorEl = document.getElementById("error");
+
+  const CACHED_CODE_KEY = `neon_payment_method_code_${orderID}`;
 
   let timerSeconds = 0;
   let timerHandle = null;
   let latestOrder = null;
-  let lockedMethodCode = "";
+  // The 5-digit code locked to the current server-side payment method slot.
+  // Persisted in sessionStorage so a page refresh retains context.
+  let cachedMethodCode = sessionStorage.getItem(CACHED_CODE_KEY) || "";
 
   if (!orderID || !flightID) {
     showError(errorEl, "Missing order or flight. Return to seat selection.");
@@ -40,10 +43,6 @@
   paymentForm.addEventListener("submit", (event) => {
     event.preventDefault();
     submitPayment();
-  });
-
-  newMethodBtn.addEventListener("click", () => {
-    startNewPaymentMethod();
   });
 
   paymentCode.addEventListener("input", () => {
@@ -68,6 +67,15 @@
     renderOrder(order);
   }
 
+  function setCachedMethodCode(code) {
+    cachedMethodCode = code;
+    if (code) {
+      sessionStorage.setItem(CACHED_CODE_KEY, code);
+    } else {
+      sessionStorage.removeItem(CACHED_CODE_KEY);
+    }
+  }
+
   function getCurrentMethodCode(events) {
     if (!events?.length) {
       return "";
@@ -88,23 +96,17 @@
     const methodsRemaining = order.methods_remaining ?? 0;
     const attemptsExhausted = failures >= MAX_ATTEMPTS_PER_METHOD;
     const typedCode = paymentCode.value.trim();
-    const differentCodeReady =
-      attemptsExhausted &&
-      methodsRemaining > 0 &&
-      lockedMethodCode !== "" &&
-      /^\d{5}$/.test(typedCode) &&
-      typedCode !== lockedMethodCode;
+    const validInput = /^\d{5}$/.test(typedCode);
 
-    const canStartNewMethod =
-      order.status === "SEATS_HELD" && attemptsExhausted && methodsRemaining > 0;
+    // After 3 failures: Submit only if a different code is typed and methods remain.
+    // Before 3 failures: Submit for any valid code; different code will get backend-rejected (U-D5).
     const canSubmit =
-      order.status === "SEATS_HELD" && (!attemptsExhausted || differentCodeReady);
-    const canEditCode =
-      order.status === "SEATS_HELD" && (!attemptsExhausted || methodsRemaining > 0);
+      order.status === "SEATS_HELD" &&
+      validInput &&
+      (!attemptsExhausted || (methodsRemaining > 0 && typedCode !== cachedMethodCode));
 
     submitBtn.disabled = !canSubmit;
-    newMethodBtn.disabled = !canStartNewMethod;
-    paymentCode.disabled = !canEditCode;
+    paymentCode.disabled = order.status !== "SEATS_HELD" || (attemptsExhausted && methodsRemaining === 0);
   }
 
   function renderOrder(order) {
@@ -132,6 +134,7 @@
       paymentPanel.classList.add("hidden");
       showError(errorEl, terminalMessage(order.status));
       setStoredOrderID(null);
+      setCachedMethodCode("");
       setFormDisabled(true);
       return;
     }
@@ -152,20 +155,22 @@
 
     paymentPanel.classList.remove("hidden");
     confirmationPanel.classList.add("hidden");
-    if (attemptsExhausted) {
-      const codeOnMethod = getCurrentMethodCode(order.payment_events || []);
-      lockedMethodCode = codeOnMethod || paymentCode.value.trim();
-    } else {
-      lockedMethodCode = "";
+
+    // Sync cached method code from payment events after each server response.
+    const codeFromEvents = getCurrentMethodCode(order.payment_events || []);
+    if (codeFromEvents) {
+      setCachedMethodCode(codeFromEvents);
+    } else if (!cachedMethodCode && failures > 0) {
+      // Fallback: derive from the typed value on first failure
+      setCachedMethodCode(paymentCode.value.trim());
+    } else if (failures === 0) {
+      setCachedMethodCode("");
     }
 
     updateFormControls(order);
 
     if (attemptsExhausted && methodsRemaining > 0) {
-      showFeedback(
-        "Attempts exhausted for this code. Enter a different 5-digit code and submit, or click Try new payment method first.",
-        "info"
-      );
+      showFeedback("Attempts exhausted for this code. Enter a different 5-digit code to continue.", "info");
     } else {
       hideFeedback();
     }
@@ -173,7 +178,6 @@
 
   function setFormDisabled(disabled) {
     submitBtn.disabled = disabled;
-    newMethodBtn.disabled = disabled;
     paymentCode.disabled = disabled;
   }
 
@@ -194,7 +198,9 @@
       let order = latestOrder;
       const failures = order?.payment_failures ?? 0;
       const attemptsExhausted = failures >= MAX_ATTEMPTS_PER_METHOD;
-      if (attemptsExhausted && lockedMethodCode !== "" && code !== lockedMethodCode) {
+
+      // Auto-trigger new-method when attempts are exhausted and a different code was entered.
+      if (attemptsExhausted && cachedMethodCode !== "" && code !== cachedMethodCode) {
         order = await postJSON(`/orders/${encodeURIComponent(orderID)}/payment/new-method`, {});
         renderOrder(order);
       }
@@ -204,6 +210,7 @@
 
       if (order.status === "CONFIRMED") {
         setStoredOrderID(null);
+        setCachedMethodCode("");
         showConfirmation(order);
         return;
       }
@@ -211,15 +218,12 @@
       const exhaustedAfterPay = (order.payment_failures ?? 0) >= MAX_ATTEMPTS_PER_METHOD;
       const methodsRemaining = order.methods_remaining ?? 0;
       if (exhaustedAfterPay && methodsRemaining > 0) {
-        showFeedback(
-          "Attempts exhausted for this code. Enter a different 5-digit code and submit, or click Try new payment method first.",
-          "info"
-        );
+        showFeedback("Attempts exhausted for this code. Enter a different 5-digit code to continue.", "info");
         return;
       }
 
       const lastEvent = (order.payment_events || []).slice(-1)[0];
-      const message = lastEvent?.message || "Payment failed. Try again with the same code.";
+      const message = lastEvent?.message || "Payment failed. Try again.";
       showFeedback(message, "error");
     } catch (err) {
       if (err.status === 400 || err.status === 410) {
@@ -227,23 +231,6 @@
       } else {
         showError(errorEl, err.message);
       }
-      await loadOrder();
-    }
-  }
-
-  async function startNewPaymentMethod() {
-    if (newMethodBtn.disabled) {
-      return;
-    }
-    hideError(errorEl);
-    setFormDisabled(true);
-    try {
-      const order = await postJSON(`/orders/${encodeURIComponent(orderID)}/payment/new-method`, {});
-      paymentCode.value = "";
-      renderOrder(order);
-      showFeedback("New payment method started. Enter a different 5-digit code.", "info");
-    } catch (err) {
-      showFeedback(err.message, "error");
       await loadOrder();
     }
   }

@@ -231,22 +231,25 @@ Set `$env:PAYMENT_ALWAYS_FAIL = "1"` for failure flows, or `$env:PAYMENT_FAIL_UN
 
 ### 6.1 UI — New payment method (S-3 partial)
 
-1. Hold seats by **clicking seats on the map** (holds sync immediately), then **Proceed to payment**.
+1. Hold seats by clicking seats on the map, then **Proceed to payment**.
 2. Open `/payment?flight_id=101&order_id=<id>`.
-3. Submit a 5-digit code that fails (with `PAYMENT_ALWAYS_FAIL=1`) three times.
-4. **Expected:** Submit is disabled after 3 failures; counter shows `3 / 3`; **Try new payment method** becomes enabled.
-5. Click **Try new payment method**, enter a **different** 5-digit code, and submit.
+3. Submit a 5-digit code (e.g. `12345`) that fails (with `PAYMENT_ALWAYS_FAIL=1`) three times.
+4. **Expected:** Submit is disabled after 3 failures; counter shows `3 / 3`; feedback reads "Attempts exhausted…".
+5. Enter a **different** 5-digit code (e.g. `77777`) — Submit becomes enabled.
+6. Submit — the UI automatically calls new-method then payment; failures reset; event `new_method_started` appears.
 
-### 6.2 UI — Different code without new method (U-D5)
+### 6.2 UI — Different code without exhausted attempts (U-D5)
 
-1. With one code already attempted, enter a different 5-digit code without clicking **Try new payment method**.
-2. **Expected:** Inline error; event `method_change_required`; order stays `SEATS_HELD`.
+1. Submit a code (e.g. `12345`) once so it fails (`PAYMENT_ALWAYS_FAIL=1`).
+2. Enter a different 5-digit code (e.g. `54321`) and submit without exhausting all 3 attempts.
+3. **Expected:** Inline error `"start a new payment method before using a different code"` (or similar); event `method_change_required`; order stays `SEATS_HELD`; Submit remains functional.
 
 ### 6.3 UI — Method exhaustion (S-3)
 
-1. With `PAYMENT_ALWAYS_FAIL=1`, fail 3 codes × 3 attempts each (use **Try new payment method** between codes).
-2. Submit once more after the third code is exhausted.
-3. **Expected:** Status `PAYMENT_FAILED`; seats released on seat map; `localStorage` order cleared.
+1. With `PAYMENT_ALWAYS_FAIL=1`, fail code `11111` three times, then enter `22222` and submit (auto new-method).
+2. Fail `22222` three times, enter `33333` and submit (auto new-method).
+3. Fail `33333` three times, then enter any other code — Submit should be disabled (methods exhausted).
+4. **Expected:** Status `PAYMENT_FAILED`; seats released on seat map; `localStorage` order cleared.
 
 ### 6.4 UI — Timer during payment (I-D4)
 
@@ -266,8 +269,8 @@ Invoke-RestMethod -Method POST -Uri "$base/orders/$($o.order_id)/payment/new-met
 
 ### 6.6 MVP-D sign-off checklist
 
-- [ ] UI new-method button and counters (§6.1)
-- [ ] UI different-code rejection (§6.2)
+- [ ] Code-change gating after 3 failures; auto new-method on submit (§6.1)
+- [ ] Different-code rejection before exhaustion (§6.2)
 - [ ] UI method exhaustion (§6.3)
 - [ ] Timer visible during payment (§6.4)
 - [ ] `go test ./...` green (U-D1–U-D5, I-D1–I-D10)

@@ -36,7 +36,7 @@
 
     <section class="panel payment-panel" id="payment-panel">
       <h2 class="panel-title">Enter payment code</h2>
-      <p class="payment-hint">Use a 5-digit numeric code to complete your booking. To try a different code, start a new payment method first.</p>
+      <p class="payment-hint">Use a 5-digit numeric code to complete your booking. After 3 failed attempts, enter a different 5-digit code to continue.</p>
       <form id="payment-form" class="payment-form">
         <label for="payment-code">Payment code</label>
         <input
@@ -52,7 +52,6 @@
         />
         <div class="payment-actions">
           <button type="submit" id="submit-btn" class="btn btn-primary">Submit payment</button>
-          <button type="button" id="new-method-btn" class="btn btn-secondary">Try new payment method</button>
         </div>
       </form>
       <p id="payment-feedback" class="payment-feedback hidden" role="status"></p>

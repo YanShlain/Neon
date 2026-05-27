@@ -9,7 +9,6 @@ test("payment page shows attempts exhausted state after 3 failures", async ({ pa
 
   const codeInput = page.locator("#payment-code");
   const submitButton = page.getByRole("button", { name: /Submit payment/i });
-  const newMethodButton = page.getByRole("button", { name: /Try new payment method/i });
   const feedback = page.locator("#payment-feedback");
 
   for (let i = 0; i < 3; i++) {
@@ -18,7 +17,6 @@ test("payment page shows attempts exhausted state after 3 failures", async ({ pa
     await expect(page.locator("#attempts-used")).toHaveText(`${i + 1} / 3`, { timeout: 15000 });
   }
   await expect(submitButton).toBeDisabled();
-  await expect(newMethodButton).toBeEnabled();
   await expect(feedback).toContainText("Attempts exhausted for this code");
 
   await codeInput.fill("77777");

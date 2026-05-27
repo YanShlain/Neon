@@ -1,7 +1,7 @@
 # Neon — Implementation Progress
 
-**Last updated:** 2026-05-26  
-**Branch:** `dev` (1 commit ahead of `origin/dev` as of last update)  
+**Last updated:** 2026-05-27  
+**Branch:** `dev` (up to date with `origin/dev`)  
 **Canonical plan:** [docs/final_plan.md](final_plan.md)  
 **Requirements:** [docs/final_requierments.md](final_requierments.md)
 
@@ -24,7 +24,7 @@ Implement phases **MVP-A → MVP-E** one at a time. After each phase:
 | **MVP-A** | Flight catalog + read-only UI | **Done** | U-A1–U-A6, I-A1–I-A4 ✅ |
 | **MVP-B** | Holds, timer, cancel, booking UI | **Done** (user signed off) | U-B0–U-B7, I-B0–I-B5 ✅ |
 | **MVP-C** | Payment happy path | **Done** (user signed off) | U-C1–U-C6, I-C1–I-C10 ✅ |
-| **MVP-D** | Payment edge cases | **Done** (awaiting sign-off) | U-D1–U-D5, I-D1–I-D10 ✅ |
+| **MVP-D** | Payment edge cases | **Done** (user signed off) | U-D1–U-D5, I-D1–I-D10 ✅ |
 | **MVP-E** | E2E polish | Not started | E-E1–E-E7 |
 
 ---
@@ -138,9 +138,10 @@ All MVP-C tests pass (`go test ./...`).
 
 ---
 
-## MVP-D — Complete (awaiting manual sign-off)
+## MVP-D — Complete ✅
 
 **Scope:** Payment edge cases — 3 methods × 3 attempts, timer/payment race (S-3, S-4), new-method API and UI.
+**Manual sign-off:** 2026-05-27
 
 ### Backend
 
@@ -154,7 +155,8 @@ All MVP-C tests pass (`go test ./...`).
 
 ### UI
 
-- **Try new payment method** button → `POST .../payment/new-method`
+- Submit is gated by cached payment code after 3 failures on a method
+- Auto `POST .../payment/new-method` on submit when attempts are exhausted and code changes
 - Method/attempt counters from `GetStatus`
 - Payment events timeline
 - Terminal messaging for `PAYMENT_FAILED` and `EXPIRED`
@@ -181,7 +183,7 @@ All MVP-D tests pass (`go test ./...`).
 | I-D9 | Integration | Different code without new method → 400 | ✅ |
 | I-D10 | Integration | New method before payment → 400 | ✅ |
 
-Manual steps: [manual_tests.md](manual_tests.md) §6.
+Manual steps: [manual_tests.md](manual_tests.md) §6 (6.1 and 6.2 confirmed).
 
 ---
 
@@ -204,8 +206,8 @@ If port 8080 is busy: `netstat -ano | findstr ":8080"` then `Stop-Process -Id <P
 
 Use this block when onboarding a new agent:
 
-> **Continue Neon on branch `dev`.** MVP-A through MVP-D are **implemented**; MVP-D awaits manual sign-off.  
-> **Next task: MVP-E only** (Playwright E2E) — when user confirms MVP-D.  
+> **Continue Neon on branch `dev`.** MVP-A through MVP-D are **implemented and signed off**.  
+> **Next task: MVP-E only** (Playwright E2E) — when user asks to start it.  
 > Read `docs/progress.md`, `docs/final_plan.md`, and `docs/handoff.md` first.
 
 ### Architecture reminders
@@ -223,12 +225,15 @@ Temporal: namespace `flight-booking`, task queue `booking-task-queue`.
 ## Git state
 
 ```text
-Branch: dev (ahead of origin/dev by 1 commit as of last update)
+Branch: dev (up to date with origin/dev)
 Latest commits:
-  c5a5d29 feat(mvp-c): payment happy path with tests and manual guide
-  9adfc25 docs: add agent handoff guide for MVP-C continuation
-  6f79c25 feat(mvp-b): add seat holds, timer, cancel, and booking UI
-  e18edbf feat(ui): add MVP-A read-only web UI and per-phase UI plan
+  1954e2f fix(ui): preserve method-change rejection feedback on payment page
+  8e07d94 fix(ui): remove new-method button; gate submit by cached payment code
+  5d42d4a fix(ui): enable Proceed to payment when order is CREATED
+  cfa1ffd fix(ui): remove seat-click server sync to eliminate blink
+  7537eb1 fix(ui): restore payment submit after attempts exhausted
+  7ff6e73 fix(ui): seat selection sync and payment attempt exhaustion UX
+  2d4a617 feat(mvp-d): payment edge cases, timer on flight click, and booking UI
 ```
 
 Push when ready: `git push origin dev`

@@ -1,8 +1,8 @@
 # Agent Handoff — Neon Flight Booking
 
 **Purpose:** Onboard a new AI agent to continue this project from the current stopping point.  
-**Last updated:** 2026-05-26  
-**Branch:** `dev` (1 commit ahead of `origin/dev` — MVP-C commit `c5a5d29` not pushed yet)
+**Last updated:** 2026-05-27  
+**Branch:** `dev` (up to date with `origin/dev`)
 
 ---
 
@@ -18,15 +18,15 @@ Read first:
   docs/progress.md         (phase checklist)
   docs/manual_tests.md     (MVP-C verification; reference for test style)
 
-Status: MVP-A, MVP-B, and MVP-C are DONE and user-signed-off (2026-05-26).
-Implement MVP-D ONLY when the user explicitly asks.
+Status: MVP-A, MVP-B, MVP-C, and MVP-D are DONE and user-signed-off.
+Start MVP-E only when the user explicitly asks.
 
-MVP-D = payment edge cases:
+MVP-D highlights (completed):
   - StartNewPaymentMethod signal + POST .../payment/new-method
   - 3 payment methods × 3 attempts exhaustion (S-3)
   - RejectInFlightPayment + timer-vs-payment race (S-4)
-  - Edge-case UI (new-method button, payment events timeline)
-  - Tests U-D1–U-D5, I-D1–I-D4 — all must pass (go test ./...)
+  - Edge-case UI (cached-code submit gating + payment events timeline)
+  - Tests U-D1–U-D5, I-D1–I-D10 passing
 
 Rules:
   - One phase at a time
@@ -92,35 +92,36 @@ Phases are defined in [final_plan.md](final_plan.md). UI is built **incrementall
 
 ---
 
-## What to build next — MVP-D only
+## What to build next — MVP-E only
 
-**Do not implement MVP-E yet** (no Playwright E2E until MVP-D is signed off).
+**MVP-D is signed off**. Next phase is MVP-E when requested by user.
 
-### Backend deliverables
+### MVP-D completion notes (for context)
 
 | Item | Details |
 |------|---------|
-| `StartNewPaymentMethod` signal | Required before submitting a different 5-digit code |
+| `StartNewPaymentMethod` signal | Used by UI submit flow when attempts are exhausted and code changes |
 | API | `POST /api/v1/orders/{order_id}/payment/new-method` |
 | Method/attempt tracking | Max 3 methods, max 3 attempts per method (S-3) |
 | `RejectInFlightPayment` activity | Timer wins race over in-flight payment (S-4) |
 | Workflow | Timer branch rejects payment; `payment_events` includes expiry rejections |
-| Different code without new-method | Rejected (U-D5, I-D3) |
+| Different code without new-method | Rejected before exhaustion (U-D5, I-D9) |
 
-### UI deliverables (MVP-D)
+### UI deliverables (MVP-D, final)
 
-- **Try new payment method** button before a different code
+- Submit gating by cached payment code after 3 failures
+- Automatic new-method transition on submit when code changes after exhaustion
 - Attempt/method counters from `GetStatus`
 - **Payment events** timeline
 - Timer visible during `AWAITING_PAYMENT` (never pauses) — polish if needed
 
 See [final_plan.md](final_plan.md) § MVP-D.
 
-### Acceptance tests (must all pass)
+### Acceptance tests (all passing)
 
 **Unit** — [final_plan.md](final_plan.md) § MVP-D: U-D1–U-D5
 
-**Integration:** I-D1–I-D4 (S-3, S-4, new-method flow, timer never pauses)
+**Integration:** I-D1–I-D10
 
 Run: `go test ./...`
 
@@ -184,7 +185,7 @@ docs/
 
 ---
 
-## Key files to read before MVP-D
+## Key files to read before MVP-E
 
 1. [final_plan.md](final_plan.md) §2.5 — signals, selector loop, payment rules
 2. [final_plan.md](final_plan.md) § MVP-D — acceptance tests
@@ -221,27 +222,22 @@ go run ./cmd/api       # http://localhost:8080
 
 ---
 
-## Suggested implementation order for MVP-D
+## Suggested implementation order for MVP-E
 
-1. Extend workflow state: `methodsUsed`, `attemptsOnCurrentMethod`, current code tracking
-2. `StartNewPaymentMethod` signal + reset attempt counter
-3. Enforce different-code rejection without new-method (workflow + HTTP 400)
-4. `RejectInFlightPayment` activity; timer branch calls it when payment in flight
-5. Terminal failure when 3×3 exhausted (S-3)
-6. `POST .../payment/new-method` in `OrderService` + handler
-7. Unit tests U-D1–U-D5
-8. Integration tests I-D1–I-D4
-9. MVP-D UI (new-method button, events list, counters)
-10. Manual checklist → user sign-off → update `docs/progress.md`
+1. Confirm MVP-E scope in `final_plan.md`
+2. Add/expand Playwright specs for end-to-end booking/payment paths
+3. Cover edge cases already validated in MVP-D (including different-code rejection)
+4. Validate responsive and UX polish tasks
+5. Run test suite and update docs/checklists
 
 ---
 
 ## Process rules (mandatory)
 
-1. **One MVP phase at a time** — currently **MVP-D** when user approves
+1. **One MVP phase at a time** — currently **MVP-E** when user approves
 2. **`go test ./...` green** before declaring done
 3. **Manual test steps** at phase end (extend [manual_tests.md](manual_tests.md) or add MVP-D section)
-4. **Wait for user confirmation** before MVP-E
+4. **Wait for user confirmation** before starting/changing MVP-E scope
 5. **Surgical changes** — match existing style
 6. **Commit** when user asks (they push separately)
 

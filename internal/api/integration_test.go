@@ -3,28 +3,13 @@ package api_test
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
-	"net/http/httptest"
+	"strings"
 	"testing"
 
-	"neon/internal/app"
 	"neon/internal/infrastructure/memory"
 )
-
-func newTestServer(t *testing.T) (*httptest.Server, *memory.SeatRepository) {
-	t.Helper()
-	repos, err := app.Bootstrap(memory.DefaultSeedConfig())
-	if err != nil {
-		t.Fatalf("bootstrap: %v", err)
-	}
-	seatRepo, ok := repos.Seats.(*memory.SeatRepository)
-	if !ok {
-		t.Fatal("expected *memory.SeatRepository")
-	}
-	srv := httptest.NewServer(app.NewRouter(repos))
-	t.Cleanup(srv.Close)
-	return srv, seatRepo
-}
 
 // I-A1: Server with seed — GET /flights — ≥2 flights
 func TestI_A1_GetFlightsReturnsAtLeastTwo(t *testing.T) {
@@ -142,4 +127,41 @@ func TestI_A3_GetSeatMapShowsHeldSeat(t *testing.T) {
 	if seat1A.OrderID != "O1" {
 		t.Fatalf("1A order_id = %q, want O1", seat1A.OrderID)
 	}
+}
+
+// I-A4: Server with UI embedded — GET / — 200; flight list HTML served
+func TestI_A4_GetRootServesFlightListUI(t *testing.T) {
+	srv, _ := newTestServer(t)
+
+	resp, err := http.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatalf("GET /: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	ct := resp.Header.Get("Content-Type")
+	if ct != "text/html; charset=utf-8" {
+		t.Fatalf("content-type = %q, want text/html; charset=utf-8", ct)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	html := string(body)
+	if !containsAll(html, "Neon Air", "flights.js", "flight-grid") {
+		t.Fatalf("unexpected HTML body: %q", html)
+	}
+}
+
+func containsAll(s string, parts ...string) bool {
+	for _, p := range parts {
+		if !strings.Contains(s, p) {
+			return false
+		}
+	}
+	return true
 }

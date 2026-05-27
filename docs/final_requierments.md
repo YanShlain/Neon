@@ -1,7 +1,7 @@
 # Reviewed Requirements: Flight Booking System (Temporal)
 
 **Status:** LOCKED
-**Last updated:** 2026-05-24
+**Last updated:** 2026-05-27
 **Confidence:** 98.75%
 
 ---
@@ -14,7 +14,7 @@ A multi-flight seat reservation and payment system orchestrated by **Temporal**.
 ### 2.1 Seat Management & Timer
 - **Multi-Flight:** Inventory is isolated per `flight_id`. Seat `1A` on Flight A is distinct from `1A` on Flight B.
 - **Hold Limit:** A user can hold up to the total capacity of the plane in a single order.
-- **Continuous Timer:** The 15-minute hold timer **never pauses**. It starts upon the first seat selection and **refreshes to a full 15 minutes** on every subsequent selection change.
+- **Continuous Timer:** The 15-minute booking timer **never pauses**. It starts when the user selects a flight (order created) and **refreshes to a full 15 minutes** on every seat selection change.
 - **Expiry:** If the timer hits zero, all held seats are released immediately, even if a payment validation is currently in progress.
 
 ### 2.2 Payment Logic
@@ -36,8 +36,8 @@ A multi-flight seat reservation and payment system orchestrated by **Temporal**.
 - **Stack:** Go (API & Workers), Temporal, Web Frontend.
 
 ## 4. State Machine (Order)
-1.  `CREATED`: Initial state.
-2.  `SEATS_HELD`: Timer running (15 min).
+1.  `CREATED`: Order started; timer running (15 min); no seats held yet.
+2.  `SEATS_HELD`: Seats held; timer running (refreshes on seat changes).
 3.  `AWAITING_PAYMENT`: Payment validation active; **Timer still running**.
 4.  `CONFIRMED`: Terminal success.
 5.  `EXPIRED`: Terminal failure (timer hit zero).

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -23,27 +22,8 @@ func main() {
 	}
 	defer application.Close()
 
-	router := application.NewRouter()
-	addr := envOrDefault("API_ADDR", ":8080")
-	srv := &http.Server{Addr: addr, Handler: router}
-
-	go func() {
-		slog.Info("starting api server", "addr", addr)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			slog.Error("server stopped", "error", err)
-			os.Exit(1)
-		}
-	}()
-
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	slog.Info("worker running", "task_queue", "booking-task-queue")
 	<-stop
-	_ = srv.Shutdown(context.Background())
-}
-
-func envOrDefault(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
 }

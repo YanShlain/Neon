@@ -4,10 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/gin-gonic/gin"
-
 	"neon/domain"
-	"neon/internal/api"
 	"neon/internal/infrastructure/memory"
 )
 
@@ -26,9 +23,4 @@ func Bootstrap(seedCfg memory.SeedConfig) (*Repos, error) {
 	}
 	slog.Info("inventory seeded", "flights", len(seedCfg.FlightIDs))
 	return &Repos{Flights: flights, Seats: seats}, nil
-}
-
-// NewRouter builds the HTTP router with seeded repositories.
-func NewRouter(repos *Repos) *gin.Engine {
-	return api.NewRouter(repos.Flights, repos.Seats)
 }

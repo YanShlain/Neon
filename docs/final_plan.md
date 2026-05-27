@@ -205,7 +205,7 @@ loop until terminal:
 | **Flights** | Static seed at startup (≥2 flights); regular rows × letter columns; all seats bookable |
 | **Hold limit** | Up to full plane capacity per order |
 | **Payment methods** | UI **"Try new payment method"** required before a different 5-digit code (`POST .../payment/new-method`) |
-| **CREATED state** | Internal only — user goes straight to seat picker; first `PATCH .../seats` → `SEATS_HELD` |
+| **CREATED state** | User goes to seat picker after `POST /orders`; timer starts on order create; first `PATCH .../seats` with seats → `SEATS_HELD` |
 | **Real-time UI** | Request/response only — no polling, WebSocket, or SSE |
 | **Idempotency** | Not required for payment submit |
 | **Notifications** | UI-only confirmation |
@@ -289,53 +289,86 @@ sequenceDiagram
 
 ## 8. Phased MVPs (delivery strategy)
 
-Each phase is **independently demoable**. Phases A–D demo via API (curl/Postman); MVP-E adds the web UI.
+Each phase is **independently demoable** via API and a **growing web UI**. UI features accumulate per phase; later phases extend earlier pages rather than replacing them.
 
 ```mermaid
 flowchart LR
-  MVP_A[MVP-A Inventory]
-  MVP_B[MVP-B Holds and Timer]
-  MVP_C[MVP-C Payment Happy Path]
-  MVP_D[MVP-D Payment Edge Cases]
-  MVP_E[MVP-E Web UI]
+  MVP_A[MVP-A Inventory plus read UI]
+  MVP_B[MVP-B Holds plus timer UI]
+  MVP_C[MVP-C Payment UI]
+  MVP_D[MVP-D Payment edge-case UI]
+  MVP_E[MVP-E E2E polish]
   MVP_A --> MVP_B --> MVP_C --> MVP_D --> MVP_E
 ```
 
-| Phase | Business value after phase | Scenarios |
-|-------|---------------------------|-----------|
-| **MVP-A** | Browse flights; view seat map | Partial S-5 (read) |
-| **MVP-B** | Hold seats, 15m timer refresh, cancel, auto-expire | S-2, S-5 |
-| **MVP-C** | Pay → seats BOOKED | S-1 |
-| **MVP-D** | Full payment rules + timer/payment race | S-3, S-4 |
-| **MVP-E** | Full browser experience | S-1–S-5 via UI |
+| Phase | Business value after phase | Scenarios | UI added in phase |
+|-------|---------------------------|-----------|-------------------|
+| **MVP-A** | Browse flights; view seat map | Partial S-5 (read) | Flight list; read-only seat map; status legend; refresh; departed banner |
+| **MVP-B** | Hold seats, 15m timer refresh, cancel, auto-expire | S-2, S-5 | Seat selection; order timer; cancel; own-hold highlight; `localStorage` order |
+| **MVP-C** | Pay → seats BOOKED | S-1 | Payment form; submit; success/failure feedback; post-pay seat map |
+| **MVP-D** | Full payment rules + timer/payment race | S-3, S-4 | New-method button; attempt/method counters; payment events; expiry/failure states |
+| **MVP-E** | Full stakeholder demo + E2E coverage | S-1–S-5 via UI | Responsive polish; accessibility; Playwright E-E1–E-E7 |
 
 ### MVP-A — Flight catalog and seat map
 
-**Deliverables:** `domain/`, in-memory repos, startup seed (≥2 flights), `GET /flights`, `GET /flights/{id}/seats`, per-flight mutex.
+**Deliverables:** `domain/`, in-memory repos, startup seed (≥2 flights), `GET /flights`, `GET /flights/{id}/seats`, per-flight mutex, static web UI served from API.
 
-**Exit criteria:** Unit U-A1–U-A6 green; integration I-A1–I-A3 green. No Temporal.
+**UI deliverables:**
+- **Flight list page** — cards for each flight (ID, departure, capacity); link to seat map.
+- **Seat map page** — row × column grid; read-only (no selection yet).
+- **Status legend** — Available / Held / Booked color key.
+- **Grayscale styling** — HELD and BOOKED seats rendered muted (others' holds; no `order_id` in MVP-A).
+- **Refresh control** — manual refetch of seat map on user action (no polling).
+- **Departed-flight banner** — warning when `departure_at` is in the past.
+
+**Exit criteria:** Unit U-A1–U-A6 green; integration I-A1–I-A4 green. No Temporal.
 
 ### MVP-B — Seat holds, timer, cancel, expiry
 
 **Deliverables:** `BookingWorkflow` (holds only), `HoldSeats`/`ReleaseSeats` activities, `cmd/worker`, order API endpoints, `GetStatus` with timer.
 
-**Exit criteria:** U-B1–U-B7, I-B1–I-B5 green. Demo: create order → pick seats → timer → cancel/expiry.
+**UI deliverables:**
+- **Start booking** — selecting a flight calls `POST /orders`; stores `order_id` in `localStorage`.
+- **Interactive seat map** — toggle seats; `PATCH .../seats` on confirm selection.
+- **Hold timer** — display `timer_remaining_seconds`; client countdown between requests.
+- **Own-hold highlight** — pass `?order_id=`; user's HELD seats highlighted vs grayscale others.
+- **Cancel order** — button → `POST .../cancel`; clears `localStorage` on terminal state.
+- **Single-order rule** — block starting a new booking while a non-terminal order exists.
+
+**Exit criteria:** U-B0–U-B7, I-B0–I-B5 green. Demo: create order → pick seats → timer → cancel/expiry via UI.
 
 ### MVP-C — Payment happy path
 
 **Deliverables:** `ValidatePayment`, `ConfirmSeats`, `SubmitPayment` signal, `POST .../payment`, `payment_events` in query.
 
-**Exit criteria:** U-C1–U-C6, I-C1–I-C3 green. **S-1** via API.
+**UI deliverables:**
+- **Payment screen** — 5-digit code input with format validation.
+- **Submit payment** — `POST .../payment`; show inline success/failure.
+- **Order status strip** — `SEATS_HELD` → `AWAITING_PAYMENT` → `CONFIRMED`.
+- **Confirmation view** — booked seats summary on success; refetch seat map (BOOKED grayscale).
+
+**Exit criteria:** U-C1–U-C6, I-C1–I-C3 green. **S-1** via UI and API.
 
 ### MVP-D — Payment edge cases
 
 **Deliverables:** `StartNewPaymentMethod` signal + API, method/attempt tracking, `RejectInFlightPayment`, terminal failure on exhaustion.
 
-**Exit criteria:** U-D1–U-D5, I-D1–I-D4 green. **S-3**, **S-4** via API. All scenarios at API level.
+**UI deliverables:**
+- **Try new payment method** — explicit button → `POST .../payment/new-method` before a different code.
+- **Attempt/method counters** — methods remaining and attempts on current method.
+- **Payment events list** — timeline from `GetStatus.payment_events`.
+- **Timer during payment** — countdown visible while `AWAITING_PAYMENT` (never pauses).
+- **Terminal failure states** — clear messaging for exhaustion, expiry, and hold conflict (409).
 
-### MVP-E — Web UI
+**Exit criteria:** U-D1–U-D5, I-D1–I-D4 green. **S-3**, **S-4** via UI and API.
 
-**Deliverables:** Static web app (flight list → seats → payment → result), client timer, new-method button, grayscale map, single-order UI rule, departed-flight banner.
+### MVP-E — E2E polish and full demo
+
+**Deliverables:** Responsive layout, accessibility pass, docker-compose stack for E2E, Playwright suite covering full journeys.
+
+**UI deliverables:**
+- **Cross-browser E2E** — E-E1–E-E7 (happy path, timer refresh, method exhaustion, late payment, multi-flight, multi-user map, single-order rule).
+- **Polish** — mobile-friendly seat grid, loading/error states, consistent navigation flight list → seats → payment → result.
 
 **Exit criteria:** U-E1–U-E3 (if extracted), E-E1–E-E7 green. Full stakeholder demo.
 
@@ -365,6 +398,7 @@ Tests use **Given / When / Then** tied to requirement scenarios. Build testabili
 | I-A1 | Server with seed | `GET /flights` | ≥2 flights |
 | I-A2 | Server with seed | `GET /flights/101/seats` | Full grid, all AVAILABLE |
 | I-A3 | `1A` HELD on 101 in repo | `GET /flights/101/seats` | `1A` HELD |
+| I-A4 | Server with UI embedded | `GET /` | 200; flight list HTML served |
 
 ### MVP-B
 
@@ -372,6 +406,7 @@ Tests use **Given / When / Then** tied to requirement scenarios. Build testabili
 
 | ID | Given | When | Then |
 |----|-------|------|------|
+| U-B0 | New order on 101 | Workflow started | `CREATED`; timer ≈15m |
 | U-B1 | New order on 101 | First `UpdateSeats` [`1A`] | `SEATS_HELD`; timer ≈15m |
 | U-B2 | Holding `1A`; 8m elapsed | `UpdateSeats` [`1A`,`1B`] | Timer ≈15m |
 | U-B3 | Holding `1A` | `UpdateSeats` [`2A`] | `1A` released; `2A` held |
@@ -384,6 +419,7 @@ Tests use **Given / When / Then** tied to requirement scenarios. Build testabili
 
 | ID | Scenario | Expected |
 |----|----------|----------|
+| I-B0 | Flight selected | `POST /orders` | `CREATED`; timer ≈900 |
 | I-B1 | **S-2** Timer refresh | `timer_remaining_seconds` ≈900 after seat change |
 | I-B2 | **S-5** Multi-flight | Isolated holds on 101 vs 102 |
 | I-B3 | Cancel | `CANCELLED`; seats released |
@@ -504,11 +540,11 @@ flowchart LR
 
 ## 11. Implementation order
 
-1. **MVP-A** — domain, repos, read API, tests → demo GET endpoints
-2. **MVP-B** — workflow holds/timer, worker, order API, tests → demo S-2/S-5 via API
-3. **MVP-C** — payment activities, tests → demo S-1 via API
-4. **MVP-D** — new-method flow, S-4 race, tests → demo S-3/S-4 via API
-5. **MVP-E** — web UI, E2E tests → full demo
+1. **MVP-A** — domain, repos, read API, read-only UI, tests → demo flight list + seat map
+2. **MVP-B** — workflow holds/timer, worker, order API, booking UI → demo S-2/S-5 via UI
+3. **MVP-C** — payment activities, payment UI → demo S-1 via UI
+4. **MVP-D** — new-method flow, S-4 race, edge-case UI → demo S-3/S-4 via UI
+5. **MVP-E** — E2E polish, Playwright suite → full stakeholder demo
 
 ---
 

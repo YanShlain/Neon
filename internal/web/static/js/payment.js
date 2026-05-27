@@ -26,6 +26,8 @@
 
   let timerSeconds = 0;
   let timerHandle = null;
+  let latestOrder = null;
+  let lockedMethodCode = "";
 
   if (!orderID || !flightID) {
     showError(errorEl, "Missing order or flight. Return to seat selection.");
@@ -44,6 +46,12 @@
     startNewPaymentMethod();
   });
 
+  paymentCode.addEventListener("input", () => {
+    if (latestOrder) {
+      updateFormControls(latestOrder);
+    }
+  });
+
   bootstrap();
 
   async function bootstrap() {
@@ -60,18 +68,51 @@
     renderOrder(order);
   }
 
+  function getCurrentMethodCode(events) {
+    if (!events?.length) {
+      return "";
+    }
+    for (let i = events.length - 1; i >= 0; i--) {
+      if (events[i].type === "new_method_started") {
+        return "";
+      }
+      if (events[i].code) {
+        return events[i].code;
+      }
+    }
+    return "";
+  }
+
+  function updateFormControls(order) {
+    const failures = order.payment_failures ?? 0;
+    const methodsRemaining = order.methods_remaining ?? 0;
+    const attemptsExhausted = failures >= MAX_ATTEMPTS_PER_METHOD;
+    const typedCode = paymentCode.value.trim();
+    const differentCodeReady =
+      attemptsExhausted &&
+      methodsRemaining > 0 &&
+      lockedMethodCode !== "" &&
+      /^\d{5}$/.test(typedCode) &&
+      typedCode !== lockedMethodCode;
+
+    const canStartNewMethod =
+      order.status === "SEATS_HELD" && attemptsExhausted && methodsRemaining > 0;
+    const canSubmit =
+      order.status === "SEATS_HELD" && (!attemptsExhausted || differentCodeReady);
+    const canEditCode =
+      order.status === "SEATS_HELD" && (!attemptsExhausted || methodsRemaining > 0);
+
+    submitBtn.disabled = !canSubmit;
+    newMethodBtn.disabled = !canStartNewMethod;
+    paymentCode.disabled = !canEditCode;
+  }
+
   function renderOrder(order) {
+    latestOrder = order;
     const failures = order.payment_failures ?? 0;
     const methodsUsed = order.methods_used ?? 0;
     const methodsRemaining = order.methods_remaining ?? 0;
     const attemptsExhausted = failures >= MAX_ATTEMPTS_PER_METHOD;
-    const canStartNewMethod =
-      order.status === "SEATS_HELD" &&
-      methodsUsed > 0 &&
-      methodsRemaining > 0 &&
-      attemptsExhausted;
-    const canSubmit =
-      order.status === "SEATS_HELD" && !attemptsExhausted;
 
     orderStatusEl.textContent = order.status;
     heldSeatsEl.textContent = `Held seats: ${(order.held_seat_ids || []).join(", ") || "—"}`;
@@ -111,13 +152,18 @@
 
     paymentPanel.classList.remove("hidden");
     confirmationPanel.classList.add("hidden");
-    submitBtn.disabled = !canSubmit;
-    newMethodBtn.disabled = !canStartNewMethod;
-    paymentCode.disabled = !canSubmit && !canStartNewMethod;
+    if (attemptsExhausted) {
+      const codeOnMethod = getCurrentMethodCode(order.payment_events || []);
+      lockedMethodCode = codeOnMethod || paymentCode.value.trim();
+    } else {
+      lockedMethodCode = "";
+    }
+
+    updateFormControls(order);
 
     if (attemptsExhausted && methodsRemaining > 0) {
       showFeedback(
-        "Attempts exhausted for this code. Try a new payment method, then enter a different 5-digit code.",
+        "Attempts exhausted for this code. Enter a different 5-digit code and submit, or click Try new payment method first.",
         "info"
       );
     } else {
@@ -145,7 +191,15 @@
 
     setFormDisabled(true);
     try {
-      const order = await postJSON(`/orders/${encodeURIComponent(orderID)}/payment`, { code });
+      let order = latestOrder;
+      const failures = order?.payment_failures ?? 0;
+      const attemptsExhausted = failures >= MAX_ATTEMPTS_PER_METHOD;
+      if (attemptsExhausted && lockedMethodCode !== "" && code !== lockedMethodCode) {
+        order = await postJSON(`/orders/${encodeURIComponent(orderID)}/payment/new-method`, {});
+        renderOrder(order);
+      }
+
+      order = await postJSON(`/orders/${encodeURIComponent(orderID)}/payment`, { code });
       renderOrder(order);
 
       if (order.status === "CONFIRMED") {
@@ -154,11 +208,11 @@
         return;
       }
 
-      const attemptsExhausted = (order.payment_failures ?? 0) >= MAX_ATTEMPTS_PER_METHOD;
+      const exhaustedAfterPay = (order.payment_failures ?? 0) >= MAX_ATTEMPTS_PER_METHOD;
       const methodsRemaining = order.methods_remaining ?? 0;
-      if (attemptsExhausted && methodsRemaining > 0) {
+      if (exhaustedAfterPay && methodsRemaining > 0) {
         showFeedback(
-          "Attempts exhausted for this code. Try a new payment method, then enter a different 5-digit code.",
+          "Attempts exhausted for this code. Enter a different 5-digit code and submit, or click Try new payment method first.",
           "info"
         );
         return;

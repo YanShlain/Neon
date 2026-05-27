@@ -15,9 +15,15 @@ test("payment page shows attempts exhausted state after 3 failures", async ({ pa
   for (let i = 0; i < 3; i++) {
     await codeInput.fill("42315");
     await submitButton.click();
+    await expect(page.locator("#attempts-used")).toHaveText(`${i + 1} / 3`, { timeout: 15000 });
   }
-
   await expect(submitButton).toBeDisabled();
   await expect(newMethodButton).toBeEnabled();
   await expect(feedback).toContainText("Attempts exhausted for this code");
+
+  await codeInput.fill("77777");
+  await expect(submitButton).toBeEnabled();
+
+  await submitButton.click();
+  await expect(feedback).not.toContainText("Attempts exhausted for this code");
 });

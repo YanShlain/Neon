@@ -12,7 +12,8 @@ const (
 	QueryGetStatus       = "GetStatus"
 	UpdateUpdateSeats    = "UpdateSeats"
 	UpdateCancelOrder    = "CancelOrder"
-	SignalSubmitPayment  = "SubmitPayment"
+	SignalSubmitPayment         = "SubmitPayment"
+	SignalStartNewPaymentMethod = "StartNewPaymentMethod"
 )
 
 // HoldDuration returns hold timer length (15m default, overridable via HOLD_DURATION).

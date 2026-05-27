@@ -178,7 +178,7 @@ docs/
 - Workflow ID = `order_id` (UUID)
 - Seat map reads bypass Temporal: `GET .../seats` → `SeatRepository`
 - Seat writes only via activities
-- Timer **never pauses** during payment
+- Timer starts on **POST /orders** (flight click); refreshes on seat change; **never pauses** during payment
 - `HOLD_DURATION` env overrides hold timer (default 15m; use `30s` in tests)
 - **Inventory:** in-memory per API process — restart clears BOOKED/HELD seats
 

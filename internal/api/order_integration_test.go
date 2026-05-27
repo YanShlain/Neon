@@ -100,6 +100,8 @@ type orderBody struct {
 		Message string `json:"message,omitempty"`
 	} `json:"payment_events"`
 	PaymentFailures int `json:"payment_failures"`
+	MethodsUsed     int `json:"methods_used"`
+	MethodsRemaining int `json:"methods_remaining"`
 }
 
 func decodeOrder(t *testing.T, resp *http.Response) orderBody {
@@ -119,6 +121,20 @@ func createOrder(t *testing.T, srv *httptest.Server, flightID string) orderBody 
 		t.Fatalf("create order status = %d", resp.StatusCode)
 	}
 	return decodeOrder(t, resp)
+}
+
+// I-B0: Timer starts on POST /orders (flight selected)
+func TestI_B0_TimerStartsOnOrderCreate(t *testing.T) {
+	t.Setenv("HOLD_DURATION", "15m")
+	srv := newTestApp(t)
+
+	order := createOrder(t, srv, "101")
+	if order.Status != "CREATED" {
+		t.Fatalf("status = %q, want CREATED", order.Status)
+	}
+	if order.TimerRemainingSeconds < 895 || order.TimerRemainingSeconds > 900 {
+		t.Fatalf("timer_remaining_seconds = %d, want ~900", order.TimerRemainingSeconds)
+	}
 }
 
 // I-B1: S-2 Timer refresh — timer_remaining_seconds ≈900 after seat change
@@ -336,6 +352,7 @@ func TestI_C2_PaymentRetryThenSucceed(t *testing.T) {
 
 // I-C3: Timer during payment — Timer > 0 while AWAITING_PAYMENT
 func TestI_C3_TimerDuringPayment(t *testing.T) {
+	t.Setenv("PAYMENT_NEVER_FAIL", "1")
 	t.Setenv("PAYMENT_VALIDATION_DELAY", "2s")
 	srv := newTestApp(t)
 
@@ -515,5 +532,352 @@ func TestI_C10_PaymentMissingBody400(t *testing.T) {
 	defer emptyResp.Body.Close()
 	if emptyResp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("payment status = %d, want 400", emptyResp.StatusCode)
+	}
+}
+
+func startNewPaymentMethod(t *testing.T, srv *httptest.Server, orderID string) (orderBody, int) {
+	t.Helper()
+	resp, err := http.Post(srv.URL+"/api/v1/orders/"+orderID+"/payment/new-method", "application/json", nil)
+	if err != nil {
+		t.Fatalf("new payment method: %v", err)
+	}
+	defer resp.Body.Close()
+	var body orderBody
+	if resp.StatusCode == http.StatusOK {
+		body = decodeOrder(t, resp)
+	}
+	return body, resp.StatusCode
+}
+
+func holdSeat(t *testing.T, srv *httptest.Server, orderID string) {
+	t.Helper()
+	resp := patchJSON(t, srv.URL+"/api/v1/orders/"+orderID+"/seats", map[string]any{"seat_ids": []string{"1A"}})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("patch status = %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+}
+
+// I-D1: S-3 Method exhaustion — Failed order; seats released
+func TestI_D1_MethodExhaustionReleasesSeats(t *testing.T) {
+	t.Setenv("PAYMENT_ALWAYS_FAIL", "1")
+	srv, seats := newTestServer(t)
+
+	order := createOrder(t, srv, "101")
+	holdSeat(t, srv, order.OrderID)
+
+	codes := []string{"11111", "22222", "33333"}
+	for i, code := range codes {
+		for attempt := 0; attempt < 3; attempt++ {
+			body, codeHTTP := submitPayment(t, srv, order.OrderID, code)
+			if codeHTTP != http.StatusOK {
+				t.Fatalf("payment %s attempt %d status = %d", code, attempt+1, codeHTTP)
+			}
+			if body.Status != "SEATS_HELD" {
+				t.Fatalf("payment %s attempt %d order status = %q", code, attempt+1, body.Status)
+			}
+		}
+		if i < len(codes)-1 {
+			body, codeHTTP := startNewPaymentMethod(t, srv, order.OrderID)
+			if codeHTTP != http.StatusOK {
+				t.Fatalf("new method after %s status = %d", code, codeHTTP)
+			}
+			if body.MethodsUsed != i+2 {
+				t.Fatalf("methods_used = %d, want %d", body.MethodsUsed, i+2)
+			}
+		}
+	}
+
+	_, codeHTTP := submitPayment(t, srv, order.OrderID, "33333")
+	if codeHTTP != http.StatusGone {
+		t.Fatalf("terminal payment status = %d, want 410", codeHTTP)
+	}
+
+	got := getOrder(t, srv, order.OrderID)
+	if got.Status != "PAYMENT_FAILED" {
+		t.Fatalf("status = %q, want PAYMENT_FAILED", got.Status)
+	}
+
+	list, err := seats.ListByFlight(t.Context(), "101")
+	if err != nil {
+		t.Fatalf("list seats: %v", err)
+	}
+	for _, seat := range list {
+		if seat.SeatID == "1A" && seat.Status != domain.SeatStatusAvailable {
+			t.Fatalf("1A status = %q, want AVAILABLE", seat.Status)
+		}
+	}
+}
+
+// I-D2: S-4 Late payment — EXPIRED; payment rejected
+func TestI_D2_LatePaymentRejectedOnExpiry(t *testing.T) {
+	t.Setenv("HOLD_DURATION", "2s")
+	t.Setenv("PAYMENT_VALIDATION_DELAY", "5s")
+	srv := newTestApp(t)
+
+	order := createOrder(t, srv, "101")
+	holdSeat(t, srv, order.OrderID)
+
+	done := make(chan struct {
+		body orderBody
+		code int
+	}, 1)
+	go func() {
+		body, code := submitPayment(t, srv, order.OrderID, "12345")
+		done <- struct {
+			body orderBody
+			code int
+		}{body, code}
+	}()
+
+	time.Sleep(3 * time.Second)
+	got := getOrder(t, srv, order.OrderID)
+	if got.Status != "EXPIRED" {
+		t.Fatalf("status after expiry = %q, want EXPIRED", got.Status)
+	}
+	foundRejection := false
+	for _, ev := range got.PaymentEvents {
+		if ev.Type == "rejected_by_timer" {
+			foundRejection = true
+		}
+	}
+	if !foundRejection {
+		t.Fatal("expected rejected_by_timer payment event")
+	}
+
+	result := <-done
+	if result.code != http.StatusGone && result.code != http.StatusOK {
+		t.Fatalf("payment response status = %d", result.code)
+	}
+}
+
+// I-D3: New method flow — Fail 2× → new method → success
+func TestI_D3_NewMethodFlowRetrySuccess(t *testing.T) {
+	t.Setenv("PAYMENT_FAIL_UNTIL", "2")
+	srv := newTestApp(t)
+
+	order := createOrder(t, srv, "101")
+	holdSeat(t, srv, order.OrderID)
+
+	for i := 0; i < 2; i++ {
+		body, code := submitPayment(t, srv, order.OrderID, "11111")
+		if code != http.StatusOK || body.Status != "SEATS_HELD" {
+			t.Fatalf("attempt %d status=%d body=%+v", i+1, code, body)
+		}
+	}
+
+	body, code := startNewPaymentMethod(t, srv, order.OrderID)
+	if code != http.StatusOK {
+		t.Fatalf("new method status = %d", code)
+	}
+	if body.MethodsUsed != 2 || body.PaymentFailures != 0 {
+		t.Fatalf("after new method methods_used=%d failures=%d", body.MethodsUsed, body.PaymentFailures)
+	}
+
+	body, code = submitPayment(t, srv, order.OrderID, "22222")
+	if code != http.StatusOK || body.Status != "CONFIRMED" {
+		t.Fatalf("success payment status=%d body=%+v", code, body)
+	}
+}
+
+// I-D4: Timer never pauses — Timer decrements during payment
+func TestI_D4_TimerDecrementsDuringPayment(t *testing.T) {
+	t.Setenv("PAYMENT_NEVER_FAIL", "1")
+	t.Setenv("PAYMENT_VALIDATION_DELAY", "2s")
+	srv := newTestApp(t)
+
+	order := createOrder(t, srv, "101")
+	holdSeat(t, srv, order.OrderID)
+
+	before := getOrder(t, srv, order.OrderID)
+	if before.TimerRemainingSeconds <= 0 {
+		t.Fatalf("timer before payment = %d, want > 0", before.TimerRemainingSeconds)
+	}
+
+	done := make(chan orderBody, 1)
+	go func() {
+		body, _ := submitPayment(t, srv, order.OrderID, "12345")
+		done <- body
+	}()
+
+	time.Sleep(500 * time.Millisecond)
+	mid := getOrder(t, srv, order.OrderID)
+	if mid.Status != "AWAITING_PAYMENT" {
+		t.Fatalf("mid status = %q, want AWAITING_PAYMENT", mid.Status)
+	}
+	if mid.TimerRemainingSeconds >= before.TimerRemainingSeconds {
+		t.Fatalf("timer did not decrement during payment: before=%d mid=%d", before.TimerRemainingSeconds, mid.TimerRemainingSeconds)
+	}
+
+	final := <-done
+	if final.Status != "CONFIRMED" {
+		t.Fatalf("final status = %q, want CONFIRMED", final.Status)
+	}
+}
+
+// I-D5: GET order exposes methods_used, methods_remaining, payment_failures for UI counters.
+func TestI_D5_GetOrderExposesPaymentCounters(t *testing.T) {
+	srv := newTestApp(t)
+
+	order := createOrder(t, srv, "101")
+	holdSeat(t, srv, order.OrderID)
+
+	got := getOrder(t, srv, order.OrderID)
+	if got.MethodsUsed != 0 {
+		t.Fatalf("methods_used = %d, want 0 before payment", got.MethodsUsed)
+	}
+	if got.MethodsRemaining != 3 {
+		t.Fatalf("methods_remaining = %d, want 3", got.MethodsRemaining)
+	}
+	if got.PaymentFailures != 0 {
+		t.Fatalf("payment_failures = %d, want 0", got.PaymentFailures)
+	}
+}
+
+// I-D6: Fourth payment on same code — HTTP 400; failures stay at 3 (UI disables submit).
+func TestI_D6_FourthPaymentAttemptRejected(t *testing.T) {
+	t.Setenv("PAYMENT_ALWAYS_FAIL", "1")
+	srv := newTestApp(t)
+
+	order := createOrder(t, srv, "101")
+	holdSeat(t, srv, order.OrderID)
+
+	for i := 0; i < 3; i++ {
+		body, code := submitPayment(t, srv, order.OrderID, "12345")
+		if code != http.StatusOK || body.Status != "SEATS_HELD" {
+			t.Fatalf("attempt %d status=%d body=%+v", i+1, code, body)
+		}
+		if body.PaymentFailures != i+1 {
+			t.Fatalf("attempt %d payment_failures=%d, want %d", i+1, body.PaymentFailures, i+1)
+		}
+	}
+
+	_, code := submitPayment(t, srv, order.OrderID, "12345")
+	if code != http.StatusBadRequest {
+		t.Fatalf("fourth payment status = %d, want 400", code)
+	}
+
+	got := getOrder(t, srv, order.OrderID)
+	if got.PaymentFailures != 3 {
+		t.Fatalf("payment_failures = %d, want 3", got.PaymentFailures)
+	}
+	if got.Status != "SEATS_HELD" {
+		t.Fatalf("status = %q, want SEATS_HELD", got.Status)
+	}
+}
+
+// I-D7: New method after 3 methods used — HTTP 400 (no further method slots).
+func TestI_D7_NewMethodRejectedWhenAllSlotsUsed(t *testing.T) {
+	t.Setenv("PAYMENT_ALWAYS_FAIL", "1")
+	srv := newTestApp(t)
+
+	order := createOrder(t, srv, "101")
+	holdSeat(t, srv, order.OrderID)
+
+	for _, code := range []string{"11111", "22222"} {
+		for i := 0; i < 3; i++ {
+			_, codeHTTP := submitPayment(t, srv, order.OrderID, code)
+			if codeHTTP != http.StatusOK {
+				t.Fatalf("pay %s attempt %d status = %d", code, i+1, codeHTTP)
+			}
+		}
+		_, codeHTTP := startNewPaymentMethod(t, srv, order.OrderID)
+		if codeHTTP != http.StatusOK {
+			t.Fatalf("new method after %s status = %d", code, codeHTTP)
+		}
+	}
+	_, codeHTTP := submitPayment(t, srv, order.OrderID, "33333")
+	if codeHTTP != http.StatusOK {
+		t.Fatalf("first pay on third code status = %d", codeHTTP)
+	}
+
+	_, codeHTTP = startNewPaymentMethod(t, srv, order.OrderID)
+	if codeHTTP != http.StatusBadRequest {
+		t.Fatalf("fourth new-method status = %d, want 400", codeHTTP)
+	}
+
+	got := getOrder(t, srv, order.OrderID)
+	if got.MethodsUsed != 3 {
+		t.Fatalf("methods_used = %d, want 3", got.MethodsUsed)
+	}
+	if got.MethodsRemaining != 0 {
+		t.Fatalf("methods_remaining = %d, want 0", got.MethodsRemaining)
+	}
+}
+
+// I-D8: Fail 3× → new method — failures reset, methods_used=2 (manual test 6.1 API contract).
+func TestI_D8_NewMethodResetsFailuresAfterThreeAttempts(t *testing.T) {
+	t.Setenv("PAYMENT_ALWAYS_FAIL", "1")
+	srv := newTestApp(t)
+
+	order := createOrder(t, srv, "101")
+	holdSeat(t, srv, order.OrderID)
+
+	for i := 0; i < 3; i++ {
+		body, code := submitPayment(t, srv, order.OrderID, "11111")
+		if code != http.StatusOK {
+			t.Fatalf("attempt %d status = %d", i+1, code)
+		}
+		if body.PaymentFailures != i+1 {
+			t.Fatalf("attempt %d payment_failures = %d, want %d", i+1, body.PaymentFailures, i+1)
+		}
+	}
+
+	body, code := startNewPaymentMethod(t, srv, order.OrderID)
+	if code != http.StatusOK {
+		t.Fatalf("new method status = %d", code)
+	}
+	if body.MethodsUsed != 2 {
+		t.Fatalf("methods_used = %d, want 2", body.MethodsUsed)
+	}
+	if body.PaymentFailures != 0 {
+		t.Fatalf("payment_failures = %d, want 0 after new method", body.PaymentFailures)
+	}
+	if body.MethodsRemaining != 1 {
+		t.Fatalf("methods_remaining = %d, want 1", body.MethodsRemaining)
+	}
+}
+
+// I-D9: Different code without new-method — HTTP 400.
+func TestI_D9_DifferentCodeWithoutNewMethodRejected(t *testing.T) {
+	t.Setenv("PAYMENT_ALWAYS_FAIL", "1")
+	srv := newTestApp(t)
+
+	order := createOrder(t, srv, "101")
+	holdSeat(t, srv, order.OrderID)
+
+	body, code := submitPayment(t, srv, order.OrderID, "11111")
+	if code != http.StatusOK || body.Status != "SEATS_HELD" {
+		t.Fatalf("first payment status=%d body=%+v", code, body)
+	}
+
+	_, code = submitPayment(t, srv, order.OrderID, "22222")
+	if code != http.StatusBadRequest {
+		t.Fatalf("different code status = %d, want 400", code)
+	}
+
+	got := getOrder(t, srv, order.OrderID)
+	if got.Status != "SEATS_HELD" {
+		t.Fatalf("status = %q, want SEATS_HELD", got.Status)
+	}
+	if len(got.PaymentEvents) == 0 {
+		t.Fatal("expected payment_events")
+	}
+	last := got.PaymentEvents[len(got.PaymentEvents)-1]
+	if last.Type != "method_change_required" {
+		t.Fatalf("last event type = %q, want method_change_required", last.Type)
+	}
+}
+
+// I-D10: New method before any payment — HTTP 400.
+func TestI_D10_NewMethodBeforeFirstPaymentRejected(t *testing.T) {
+	srv := newTestApp(t)
+
+	order := createOrder(t, srv, "101")
+	holdSeat(t, srv, order.OrderID)
+
+	_, code := startNewPaymentMethod(t, srv, order.OrderID)
+	if code != http.StatusBadRequest {
+		t.Fatalf("new method before payment status = %d, want 400", code)
 	}
 }

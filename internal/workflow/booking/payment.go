@@ -10,6 +10,7 @@ import (
 const (
 	paymentFailureRate   = 0.15
 	maxFailuresPerCode   = 3
+	maxPaymentMethods    = 3
 	paymentActivityLimit = 10
 )
 

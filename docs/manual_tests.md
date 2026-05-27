@@ -48,8 +48,8 @@ Restart `go run ./cmd/api` after changing env vars.
 | Step | Action | Expected |
 |------|--------|----------|
 | 1 | Open http://localhost:8080 | Flight list shows **101** and **102** |
-| 2 | Click flight **101** | Seat map loads; order created (`localStorage`) |
-| 3 | Select seat **1A**, click **Confirm seat selection** | Status **SEATS_HELD**; timer ~15:00 |
+| 2 | Click flight **101** | Seat map loads; order created (`localStorage`); timer ~15:00 starts |
+| 3 | Click seat **1A** | Status **SEATS_HELD**; timer refreshes ~15:00 |
 | 4 | Click **Proceed to payment** | Payment page opens |
 | 5 | Enter `12345`, **Submit payment** | Status **CONFIRMED**; confirmation message |
 | 6 | **View seat map** | Seat **1A** is **BOOKED** (grayscale) |
@@ -225,7 +225,58 @@ When all are checked, confirm **MVP-C** in chat so **MVP-D** can start.
 
 ---
 
-## 5. Troubleshooting
+## 6. MVP-D — Payment edge cases
+
+Set `$env:PAYMENT_ALWAYS_FAIL = "1"` for failure flows, or `$env:PAYMENT_FAIL_UNTIL = "2"` for partial failures.
+
+### 6.1 UI — New payment method (S-3 partial)
+
+1. Hold seats by **clicking seats on the map** (holds sync immediately), then **Proceed to payment**.
+2. Open `/payment?flight_id=101&order_id=<id>`.
+3. Submit a 5-digit code that fails (with `PAYMENT_ALWAYS_FAIL=1`) three times.
+4. **Expected:** Submit is disabled after 3 failures; counter shows `3 / 3`; **Try new payment method** becomes enabled.
+5. Click **Try new payment method**, enter a **different** 5-digit code, and submit.
+
+### 6.2 UI — Different code without new method (U-D5)
+
+1. With one code already attempted, enter a different 5-digit code without clicking **Try new payment method**.
+2. **Expected:** Inline error; event `method_change_required`; order stays `SEATS_HELD`.
+
+### 6.3 UI — Method exhaustion (S-3)
+
+1. With `PAYMENT_ALWAYS_FAIL=1`, fail 3 codes × 3 attempts each (use **Try new payment method** between codes).
+2. Submit once more after the third code is exhausted.
+3. **Expected:** Status `PAYMENT_FAILED`; seats released on seat map; `localStorage` order cleared.
+
+### 6.4 UI — Timer during payment (I-D4)
+
+1. Set `$env:HOLD_DURATION = "2m"` (optional); use a valid code with default RNG.
+2. Submit payment and watch the hold timer during `AWAITING_PAYMENT`.
+3. **Expected:** Timer keeps counting down (never pauses).
+
+### 6.5 API — New method endpoint
+
+```powershell
+$base = "http://localhost:8080/api/v1"
+$o = Invoke-RestMethod -Method POST -Uri "$base/orders" -ContentType "application/json" -Body '{"flight_id":"101"}'
+Invoke-RestMethod -Method PATCH -Uri "$base/orders/$($o.order_id)/seats" -ContentType "application/json" -Body '{"seat_ids":["1A"]}'
+Invoke-RestMethod -Method POST -Uri "$base/orders/$($o.order_id)/payment/new-method" -ContentType "application/json" -Body '{}'
+# → 400 if no payment attempts yet; 200 after first method with failures
+```
+
+### 6.6 MVP-D sign-off checklist
+
+- [ ] UI new-method button and counters (§6.1)
+- [ ] UI different-code rejection (§6.2)
+- [ ] UI method exhaustion (§6.3)
+- [ ] Timer visible during payment (§6.4)
+- [ ] `go test ./...` green (U-D1–U-D5, I-D1–I-D10)
+
+When all are checked, confirm **MVP-D** in chat so **MVP-E** can start.
+
+---
+
+## 7. Troubleshooting
 
 | Issue | Fix |
 |-------|-----|

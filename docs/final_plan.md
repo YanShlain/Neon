@@ -205,7 +205,7 @@ loop until terminal:
 | **Flights** | Static seed at startup (≥2 flights); regular rows × letter columns; all seats bookable |
 | **Hold limit** | Up to full plane capacity per order |
 | **Payment methods** | UI **"Try new payment method"** required before a different 5-digit code (`POST .../payment/new-method`) |
-| **CREATED state** | Internal only — user goes straight to seat picker; first `PATCH .../seats` → `SEATS_HELD` |
+| **CREATED state** | User goes to seat picker after `POST /orders`; timer starts on order create; first `PATCH .../seats` with seats → `SEATS_HELD` |
 | **Real-time UI** | Request/response only — no polling, WebSocket, or SSE |
 | **Idempotency** | Not required for payment submit |
 | **Notifications** | UI-only confirmation |
@@ -335,7 +335,7 @@ flowchart LR
 - **Cancel order** — button → `POST .../cancel`; clears `localStorage` on terminal state.
 - **Single-order rule** — block starting a new booking while a non-terminal order exists.
 
-**Exit criteria:** U-B1–U-B7, I-B1–I-B5 green. Demo: create order → pick seats → timer → cancel/expiry via UI.
+**Exit criteria:** U-B0–U-B7, I-B0–I-B5 green. Demo: create order → pick seats → timer → cancel/expiry via UI.
 
 ### MVP-C — Payment happy path
 
@@ -406,6 +406,7 @@ Tests use **Given / When / Then** tied to requirement scenarios. Build testabili
 
 | ID | Given | When | Then |
 |----|-------|------|------|
+| U-B0 | New order on 101 | Workflow started | `CREATED`; timer ≈15m |
 | U-B1 | New order on 101 | First `UpdateSeats` [`1A`] | `SEATS_HELD`; timer ≈15m |
 | U-B2 | Holding `1A`; 8m elapsed | `UpdateSeats` [`1A`,`1B`] | Timer ≈15m |
 | U-B3 | Holding `1A` | `UpdateSeats` [`2A`] | `1A` released; `2A` held |
@@ -418,6 +419,7 @@ Tests use **Given / When / Then** tied to requirement scenarios. Build testabili
 
 | ID | Scenario | Expected |
 |----|----------|----------|
+| I-B0 | Flight selected | `POST /orders` | `CREATED`; timer ≈900 |
 | I-B1 | **S-2** Timer refresh | `timer_remaining_seconds` ≈900 after seat change |
 | I-B2 | **S-5** Multi-flight | Isolated holds on 101 vs 102 |
 | I-B3 | Cancel | `CANCELLED`; seats released |

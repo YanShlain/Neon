@@ -84,7 +84,7 @@ function setStoredOrderID(orderID) {
 }
 
 function isTerminalStatus(status) {
-  return status === "CONFIRMED" || status === "EXPIRED" || status === "CANCELLED";
+  return status === "CONFIRMED" || status === "EXPIRED" || status === "CANCELLED" || status === "PAYMENT_FAILED";
 }
 
 function escapeHTML(value) {

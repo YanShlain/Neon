@@ -67,6 +67,14 @@ func (a *Activities) ValidatePayment(ctx context.Context, in PaymentValidationIn
 	return nil
 }
 
+// RejectInFlightPayment simulates refund when the hold timer wins over in-flight validation (S-4).
+func (a *Activities) RejectInFlightPayment(ctx context.Context, in PaymentValidationInput) error {
+	if !isValidPaymentCode(in.Code) {
+		return temporal.NewNonRetryableApplicationError("invalid payment code format", "invalid_payment_code", nil)
+	}
+	return nil
+}
+
 // ConfirmSeats transitions held seats to BOOKED for an order.
 func (a *Activities) ConfirmSeats(ctx context.Context, in SeatMutationInput) error {
 	if len(in.SeatIDs) == 0 {

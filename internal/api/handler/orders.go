@@ -101,6 +101,20 @@ func (h *OrderHandler) SubmitPayment(c *gin.Context) {
 	c.JSON(http.StatusOK, toOrderResponse(status))
 }
 
+// StartNewPaymentMethod handles POST /api/v1/orders/:order_id/payment/new-method.
+func (h *OrderHandler) StartNewPaymentMethod(c *gin.Context) {
+	ctx := c.Request.Context()
+	orderID := c.Param("order_id")
+	slog.Info("inbound request", "method", c.Request.Method, "path", c.Request.URL.Path, "order_id", orderID)
+
+	status, err := h.orders.StartNewPaymentMethod(ctx, orderID)
+	if err != nil {
+		writeOrderError(c, orderID, err)
+		return
+	}
+	c.JSON(http.StatusOK, toOrderResponse(status))
+}
+
 // GetOrder handles GET /api/v1/orders/:order_id.
 func (h *OrderHandler) GetOrder(c *gin.Context) {
 	ctx := c.Request.Context()
@@ -132,6 +146,8 @@ func toOrderResponse(status booking.StatusResponse) dto.OrderResponse {
 		TimerRemainingSeconds: status.TimerRemainingSeconds,
 		PaymentEvents:         events,
 		PaymentFailures:       status.PaymentFailures,
+		MethodsUsed:           status.MethodsUsed,
+		MethodsRemaining:      status.MethodsRemaining,
 	}
 }
 
@@ -150,6 +166,12 @@ func writeOrderError(c *gin.Context, orderID string, err error) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "payment attempts exhausted"})
 	case errors.Is(err, temporal.ErrPaymentNotAllowed):
 		c.JSON(http.StatusBadRequest, gin.H{"error": "payment not allowed"})
+	case errors.Is(err, temporal.ErrDifferentPaymentMethodRequired):
+		c.JSON(http.StatusBadRequest, gin.H{"error": "different payment method required"})
+	case errors.Is(err, temporal.ErrNewMethodNotAllowed):
+		c.JSON(http.StatusBadRequest, gin.H{"error": "new payment method not allowed"})
+	case errors.Is(err, temporal.ErrMethodsExhausted):
+		c.JSON(http.StatusBadRequest, gin.H{"error": "payment methods exhausted"})
 	default:
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 	}

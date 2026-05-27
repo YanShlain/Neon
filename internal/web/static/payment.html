@@ -27,11 +27,16 @@
         </div>
       </div>
       <p id="held-seats" class="selection-summary">Held seats: —</p>
+      <div class="payment-counters">
+        <span>Methods used: <strong id="methods-used">0</strong></span>
+        <span>Methods remaining: <strong id="methods-remaining">0</strong></span>
+        <span>Attempts on current method: <strong id="attempts-used">0</strong></span>
+      </div>
     </section>
 
     <section class="panel payment-panel" id="payment-panel">
       <h2 class="panel-title">Enter payment code</h2>
-      <p class="payment-hint">Use a 5-digit numeric code to complete your booking.</p>
+      <p class="payment-hint">Use a 5-digit numeric code to complete your booking. To try a different code, start a new payment method first.</p>
       <form id="payment-form" class="payment-form">
         <label for="payment-code">Payment code</label>
         <input
@@ -45,9 +50,16 @@
           placeholder="12345"
           required
         />
-        <button type="submit" id="submit-btn" class="btn btn-primary">Submit payment</button>
+        <div class="payment-actions">
+          <button type="submit" id="submit-btn" class="btn btn-primary">Submit payment</button>
+          <button type="button" id="new-method-btn" class="btn btn-secondary">Try new payment method</button>
+        </div>
       </form>
       <p id="payment-feedback" class="payment-feedback hidden" role="status"></p>
+      <div class="payment-events-wrap">
+        <h3 class="payment-events-title">Payment events</h3>
+        <ul id="payment-events" class="payment-events"></ul>
+      </div>
     </section>
 
     <section id="confirmation-panel" class="panel confirmation-panel hidden">

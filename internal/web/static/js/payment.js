@@ -1,4 +1,6 @@
 (function initPaymentPage() {
+  const MAX_ATTEMPTS_PER_METHOD = 3;
+
   const params = new URLSearchParams(window.location.search);
   const orderID = params.get("order_id") || getStoredOrderID();
   const flightID = params.get("flight_id");
@@ -7,6 +9,10 @@
   const orderStatusEl = document.getElementById("order-status");
   const timerDisplay = document.getElementById("timer-display");
   const heldSeatsEl = document.getElementById("held-seats");
+  const methodsUsedEl = document.getElementById("methods-used");
+  const methodsRemainingEl = document.getElementById("methods-remaining");
+  const attemptsUsedEl = document.getElementById("attempts-used");
+  const paymentEventsEl = document.getElementById("payment-events");
   const paymentPanel = document.getElementById("payment-panel");
   const confirmationPanel = document.getElementById("confirmation-panel");
   const confirmationMessage = document.getElementById("confirmation-message");
@@ -15,6 +21,7 @@
   const paymentCode = document.getElementById("payment-code");
   const paymentFeedback = document.getElementById("payment-feedback");
   const submitBtn = document.getElementById("submit-btn");
+  const newMethodBtn = document.getElementById("new-method-btn");
   const errorEl = document.getElementById("error");
 
   let timerSeconds = 0;
@@ -33,6 +40,10 @@
     submitPayment();
   });
 
+  newMethodBtn.addEventListener("click", () => {
+    startNewPaymentMethod();
+  });
+
   bootstrap();
 
   async function bootstrap() {
@@ -46,8 +57,28 @@
 
   async function loadOrder() {
     const order = await fetchJSON(`/orders/${encodeURIComponent(orderID)}`);
+    renderOrder(order);
+  }
+
+  function renderOrder(order) {
+    const failures = order.payment_failures ?? 0;
+    const methodsUsed = order.methods_used ?? 0;
+    const methodsRemaining = order.methods_remaining ?? 0;
+    const attemptsExhausted = failures >= MAX_ATTEMPTS_PER_METHOD;
+    const canStartNewMethod =
+      order.status === "SEATS_HELD" &&
+      methodsUsed > 0 &&
+      methodsRemaining > 0 &&
+      attemptsExhausted;
+    const canSubmit =
+      order.status === "SEATS_HELD" && !attemptsExhausted;
+
     orderStatusEl.textContent = order.status;
     heldSeatsEl.textContent = `Held seats: ${(order.held_seat_ids || []).join(", ") || "—"}`;
+    methodsUsedEl.textContent = String(methodsUsed);
+    methodsRemainingEl.textContent = String(methodsRemaining);
+    attemptsUsedEl.textContent = `${failures} / ${MAX_ATTEMPTS_PER_METHOD}`;
+    renderPaymentEvents(order.payment_events || []);
     timerSeconds = order.timer_remaining_seconds || 0;
     startTimer();
 
@@ -55,16 +86,56 @@
       showConfirmation(order);
       return;
     }
-    if (order.status !== "SEATS_HELD" && order.status !== "AWAITING_PAYMENT") {
+
+    if (order.status === "PAYMENT_FAILED" || order.status === "EXPIRED") {
+      paymentPanel.classList.add("hidden");
+      showError(errorEl, terminalMessage(order.status));
+      setStoredOrderID(null);
+      setFormDisabled(true);
+      return;
+    }
+
+    if (order.status === "AWAITING_PAYMENT") {
+      paymentPanel.classList.remove("hidden");
+      confirmationPanel.classList.add("hidden");
+      setFormDisabled(true);
+      return;
+    }
+
+    if (order.status !== "SEATS_HELD") {
       paymentPanel.classList.add("hidden");
       showError(errorEl, `Order is ${order.status}. Cannot accept payment.`);
-      submitBtn.disabled = true;
+      setFormDisabled(true);
+      return;
+    }
+
+    paymentPanel.classList.remove("hidden");
+    confirmationPanel.classList.add("hidden");
+    submitBtn.disabled = !canSubmit;
+    newMethodBtn.disabled = !canStartNewMethod;
+    paymentCode.disabled = !canSubmit && !canStartNewMethod;
+
+    if (attemptsExhausted && methodsRemaining > 0) {
+      showFeedback(
+        "Attempts exhausted for this code. Try a new payment method, then enter a different 5-digit code.",
+        "info"
+      );
+    } else {
+      hideFeedback();
     }
   }
 
+  function setFormDisabled(disabled) {
+    submitBtn.disabled = disabled;
+    newMethodBtn.disabled = disabled;
+    paymentCode.disabled = disabled;
+  }
+
   async function submitPayment() {
+    if (submitBtn.disabled) {
+      return;
+    }
     hideError(errorEl);
-    hideFeedback();
 
     const code = paymentCode.value.trim();
     if (!/^\d{5}$/.test(code)) {
@@ -72,12 +143,10 @@
       return;
     }
 
-    submitBtn.disabled = true;
+    setFormDisabled(true);
     try {
       const order = await postJSON(`/orders/${encodeURIComponent(orderID)}/payment`, { code });
-      orderStatusEl.textContent = order.status;
-      timerSeconds = order.timer_remaining_seconds || 0;
-      startTimer();
+      renderOrder(order);
 
       if (order.status === "CONFIRMED") {
         setStoredOrderID(null);
@@ -89,15 +158,78 @@
       const message = lastEvent?.message || "Payment failed. Try again with the same code.";
       showFeedback(message, "error");
     } catch (err) {
-      if (err.status === 400) {
+      if (err.status === 400 || err.status === 410) {
         showFeedback(err.message, "error");
-        await loadOrder();
       } else {
         showError(errorEl, err.message);
       }
-    } finally {
-      submitBtn.disabled = false;
+      await loadOrder();
     }
+  }
+
+  async function startNewPaymentMethod() {
+    if (newMethodBtn.disabled) {
+      return;
+    }
+    hideError(errorEl);
+    setFormDisabled(true);
+    try {
+      const order = await postJSON(`/orders/${encodeURIComponent(orderID)}/payment/new-method`, {});
+      paymentCode.value = "";
+      renderOrder(order);
+      showFeedback("New payment method started. Enter a different 5-digit code.", "info");
+    } catch (err) {
+      showFeedback(err.message, "error");
+      await loadOrder();
+    }
+  }
+
+  function renderPaymentEvents(events) {
+    if (!events.length) {
+      paymentEventsEl.innerHTML = "<li class=\"payment-event-empty\">No payment attempts yet.</li>";
+      return;
+    }
+    paymentEventsEl.innerHTML = events
+      .map((ev) => {
+        const label = formatEventType(ev.type);
+        const code = ev.code ? ` (${escapeHTML(ev.code)})` : "";
+        const detail = ev.message ? `: ${escapeHTML(ev.message)}` : "";
+        return `<li class="payment-event payment-event-${escapeHTML(ev.type)}">${escapeHTML(label)}${code}${detail}</li>`;
+      })
+      .join("");
+  }
+
+  function formatEventType(type) {
+    switch (type) {
+      case "validation_success":
+        return "Payment succeeded";
+      case "validation_failed":
+        return "Payment failed";
+      case "format_invalid":
+        return "Invalid code format";
+      case "attempts_exhausted":
+        return "Attempts exhausted on current method";
+      case "method_change_required":
+        return "Different code rejected";
+      case "new_method_started":
+        return "New payment method started";
+      case "methods_exhausted":
+        return "All payment methods exhausted";
+      case "rejected_by_timer":
+        return "Payment rejected (timer expired)";
+      default:
+        return type;
+    }
+  }
+
+  function terminalMessage(status) {
+    if (status === "PAYMENT_FAILED") {
+      return "All payment methods failed. Your hold has been released.";
+    }
+    if (status === "EXPIRED") {
+      return "Your hold expired. Seats have been released.";
+    }
+    return `Order is ${status}.`;
   }
 
   function showConfirmation(order) {
@@ -105,6 +237,7 @@
     confirmationPanel.classList.remove("hidden");
     confirmationMessage.textContent = `Seats ${(order.held_seat_ids || []).join(", ")} are now booked.`;
     orderStatusEl.textContent = order.status;
+    setFormDisabled(true);
   }
 
   function showFeedback(message, kind) {

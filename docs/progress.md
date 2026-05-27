@@ -22,9 +22,9 @@ Implement phases **MVP-A → MVP-E** one at a time. After each phase:
 | Phase | Name | Status | Tests |
 |-------|------|--------|-------|
 | **MVP-A** | Flight catalog + read-only UI | **Done** | U-A1–U-A6, I-A1–I-A4 ✅ |
-| **MVP-B** | Holds, timer, cancel, booking UI | **Done** (user signed off) | U-B1–U-B7, I-B1–I-B5 ✅ |
+| **MVP-B** | Holds, timer, cancel, booking UI | **Done** (user signed off) | U-B0–U-B7, I-B0–I-B5 ✅ |
 | **MVP-C** | Payment happy path | **Done** (user signed off) | U-C1–U-C6, I-C1–I-C10 ✅ |
-| **MVP-D** | Payment edge cases | **Next** (not started) | U-D1–U-D5, I-D1–I-D4 |
+| **MVP-D** | Payment edge cases | **Done** (awaiting sign-off) | U-D1–U-D5, I-D1–I-D10 ✅ |
 | **MVP-E** | E2E polish | Not started | E-E1–E-E7 |
 
 ---
@@ -76,7 +76,7 @@ Implement phases **MVP-A → MVP-E** one at a time. After each phase:
 
 - Flight click → `POST /orders` → `localStorage`
 - Interactive seat map, confirm → `PATCH .../seats`
-- Hold timer countdown (client-side)
+- Hold timer starts on flight click; countdown on seat map and payment (client-side)
 - Own holds highlighted (blue); others' HELD/BOOKED grayscale
 - Cancel order; single active order guard on flight list
 
@@ -132,9 +132,56 @@ All MVP-C tests pass (`go test ./...`).
 | I-C9 | Integration | Payment without seats → HTTP 400 | ✅ |
 | I-C10 | Integration | Missing body → HTTP 400 | ✅ |
 
-**Not in scope (deferred to MVP-D):** `StartNewPaymentMethod`, timer-vs-payment race rejection (S-4), 3×3 method exhaustion (S-3).
+**Not in scope (deferred to MVP-D):** `StartNewPaymentMethod`, timer-vs-payment race rejection (S-4), 3×3 method exhaustion (S-3). *(Implemented in MVP-D — see below.)*
 
 **Data note:** Seat inventory is **in-memory only** — restarting `go run ./cmd/api` resets all seats to AVAILABLE (no Postgres yet).
+
+---
+
+## MVP-D — Complete (awaiting manual sign-off)
+
+**Scope:** Payment edge cases — 3 methods × 3 attempts, timer/payment race (S-3, S-4), new-method API and UI.
+
+### Backend
+
+| Area | Notes |
+|------|-------|
+| Signal | `StartNewPaymentMethod` — required before a different 5-digit code |
+| API | `POST /api/v1/orders/{id}/payment/new-method` |
+| Activity | `RejectInFlightPayment` when timer wins over in-flight validation |
+| Status | `PAYMENT_FAILED` terminal state when all methods exhausted |
+| Query | `methods_used`, `methods_remaining`, extended `payment_events` |
+
+### UI
+
+- **Try new payment method** button → `POST .../payment/new-method`
+- Method/attempt counters from `GetStatus`
+- Payment events timeline
+- Terminal messaging for `PAYMENT_FAILED` and `EXPIRED`
+
+### Tests
+
+All MVP-D tests pass (`go test ./...`).
+
+| ID | Type | Scenario | Result |
+|----|------|----------|--------|
+| U-D1 | Unit | New method resets attempts | ✅ |
+| U-D2 | Unit | 3×3 exhaustion → terminal | ✅ |
+| U-D3 | Unit | 4th new-method rejected | ✅ |
+| U-D4 | Unit | Timer rejects in-flight payment | ✅ |
+| U-D5 | Unit | Different code without new-method | ✅ |
+| I-D1 | Integration | S-3 method exhaustion | ✅ |
+| I-D2 | Integration | S-4 late payment | ✅ |
+| I-D3 | Integration | Fail 2× → new method → success | ✅ |
+| I-D4 | Integration | Timer decrements during payment | ✅ |
+| I-D5 | Integration | GET exposes payment counters | ✅ |
+| I-D6 | Integration | 4th payment attempt → HTTP 400 | ✅ |
+| I-D7 | Integration | New method when slots exhausted → 400 | ✅ |
+| I-D8 | Integration | 3 failures → new method resets counter | ✅ |
+| I-D9 | Integration | Different code without new method → 400 | ✅ |
+| I-D10 | Integration | New method before payment → 400 | ✅ |
+
+Manual steps: [manual_tests.md](manual_tests.md) §6.
 
 ---
 
@@ -157,10 +204,9 @@ If port 8080 is busy: `netstat -ano | findstr ":8080"` then `Stop-Process -Id <P
 
 Use this block when onboarding a new agent:
 
-> **Continue Neon on branch `dev`.** MVP-A, MVP-B, and MVP-C are **done and user-signed-off**.  
-> **Next task: MVP-D only** (payment edge cases) — see `docs/handoff.md`.  
-> Read `docs/progress.md`, `docs/final_plan.md`, and `docs/handoff.md` first.  
-> **Do not start MVP-D** until the user explicitly asks for it.
+> **Continue Neon on branch `dev`.** MVP-A through MVP-D are **implemented**; MVP-D awaits manual sign-off.  
+> **Next task: MVP-E only** (Playwright E2E) — when user confirms MVP-D.  
+> Read `docs/progress.md`, `docs/final_plan.md`, and `docs/handoff.md` first.
 
 ### Architecture reminders
 
@@ -189,11 +235,10 @@ Push when ready: `git push origin dev`
 
 ---
 
-## Next phase — MVP-D (not started)
+## Next phase — MVP-E (not started)
 
 | Phase | Focus |
 |-------|-------|
-| **MVP-D** | Payment edge cases (3 methods, timer/payment race S-3/S-4) |
 | **MVP-E** | Playwright E2E, responsive polish |
 
 See [final_plan.md](final_plan.md) §8 for per-phase UI deliverables.

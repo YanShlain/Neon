@@ -171,9 +171,18 @@
 
     if (attemptsExhausted && methodsRemaining > 0) {
       showFeedback("Attempts exhausted for this code. Enter a different 5-digit code to continue.", "info");
-    } else {
-      hideFeedback();
     }
+  }
+
+  function feedbackForLastEvent(order) {
+    const last = (order.payment_events || []).slice(-1)[0];
+    if (!last) {
+      return "";
+    }
+    if (last.type === "method_change_required") {
+      return last.message || "Start a new payment method before using a different code.";
+    }
+    return last.message || "";
   }
 
   function setFormDisabled(disabled) {
@@ -186,6 +195,7 @@
       return;
     }
     hideError(errorEl);
+    hideFeedback();
 
     const code = paymentCode.value.trim();
     if (!/^\d{5}$/.test(code)) {
@@ -222,16 +232,22 @@
         return;
       }
 
-      const lastEvent = (order.payment_events || []).slice(-1)[0];
-      const message = lastEvent?.message || "Payment failed. Try again.";
+      const message = feedbackForLastEvent(order) || "Payment failed. Try again.";
       showFeedback(message, "error");
     } catch (err) {
-      if (err.status === 400 || err.status === 410) {
+      await loadOrder();
+      const eventMessage = feedbackForLastEvent(latestOrder);
+      if (eventMessage) {
+        showFeedback(eventMessage, "error");
+      } else if (err.status === 400 || err.status === 410) {
         showFeedback(err.message, "error");
       } else {
         showError(errorEl, err.message);
       }
-      await loadOrder();
+    } finally {
+      if (latestOrder?.status === "SEATS_HELD") {
+        updateFormControls(latestOrder);
+      }
     }
   }
 

@@ -28,8 +28,8 @@ func NewRouter(flights domain.FlightRepository, seats domain.SeatRepository, ord
 		v1.PATCH("/orders/:order_id/seats", oh.UpdateSeats)
 		v1.POST("/orders/:order_id/cancel", oh.CancelOrder)
 		v1.POST("/orders/:order_id/payment", oh.SubmitPayment)
-		v1.POST("/orders/:order_id/payment/new-method", oh.StartNewPaymentMethod)
 		v1.GET("/orders/:order_id", oh.GetOrder)
+		v1.GET("/orders/:order_id/stream", oh.StreamOrder)
 	}
 	return r
 }

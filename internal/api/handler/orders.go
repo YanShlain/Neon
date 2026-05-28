@@ -1,9 +1,12 @@
 package handler
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -101,20 +104,6 @@ func (h *OrderHandler) SubmitPayment(c *gin.Context) {
 	c.JSON(http.StatusOK, toOrderResponse(status))
 }
 
-// StartNewPaymentMethod handles POST /api/v1/orders/:order_id/payment/new-method.
-func (h *OrderHandler) StartNewPaymentMethod(c *gin.Context) {
-	ctx := c.Request.Context()
-	orderID := c.Param("order_id")
-	slog.Info("inbound request", "method", c.Request.Method, "path", c.Request.URL.Path, "order_id", orderID)
-
-	status, err := h.orders.StartNewPaymentMethod(ctx, orderID)
-	if err != nil {
-		writeOrderError(c, orderID, err)
-		return
-	}
-	c.JSON(http.StatusOK, toOrderResponse(status))
-}
-
 // GetOrder handles GET /api/v1/orders/:order_id.
 func (h *OrderHandler) GetOrder(c *gin.Context) {
 	ctx := c.Request.Context()
@@ -127,6 +116,62 @@ func (h *OrderHandler) GetOrder(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, toOrderResponse(status))
+}
+
+// StreamOrder handles GET /api/v1/orders/:order_id/stream as Server-Sent Events.
+func (h *OrderHandler) StreamOrder(c *gin.Context) {
+	ctx := c.Request.Context()
+	orderID := c.Param("order_id")
+	slog.Info("inbound request", "method", c.Request.Method, "path", c.Request.URL.Path, "order_id", orderID)
+
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "stream not supported"})
+		return
+	}
+
+	sendStatus := func(status booking.StatusResponse) bool {
+		payload, err := json.Marshal(toOrderResponse(status))
+		if err != nil {
+			return false
+		}
+		if _, err := fmt.Fprintf(c.Writer, "event: status\ndata: %s\n\n", payload); err != nil {
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
+
+	status, err := h.orders.GetStatus(ctx, orderID)
+	if err != nil {
+		writeOrderError(c, orderID, err)
+		return
+	}
+	if !sendStatus(status) {
+		return
+	}
+
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			status, err = h.orders.GetStatus(ctx, orderID)
+			if err != nil {
+				return
+			}
+			if !sendStatus(status) {
+				return
+			}
+		}
+	}
 }
 
 func toOrderResponse(status booking.StatusResponse) dto.OrderResponse {
@@ -146,8 +191,6 @@ func toOrderResponse(status booking.StatusResponse) dto.OrderResponse {
 		TimerRemainingSeconds: status.TimerRemainingSeconds,
 		PaymentEvents:         events,
 		PaymentFailures:       status.PaymentFailures,
-		MethodsUsed:           status.MethodsUsed,
-		MethodsRemaining:      status.MethodsRemaining,
 	}
 }
 
@@ -162,16 +205,8 @@ func writeOrderError(c *gin.Context, orderID string, err error) {
 		c.JSON(http.StatusGone, gin.H{"error": "order is terminal"})
 	case errors.Is(err, temporal.ErrInvalidPaymentCode):
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payment code"})
-	case errors.Is(err, temporal.ErrPaymentAttemptsExhausted):
-		c.JSON(http.StatusBadRequest, gin.H{"error": "payment attempts exhausted"})
 	case errors.Is(err, temporal.ErrPaymentNotAllowed):
 		c.JSON(http.StatusBadRequest, gin.H{"error": "payment not allowed"})
-	case errors.Is(err, temporal.ErrDifferentPaymentMethodRequired):
-		c.JSON(http.StatusBadRequest, gin.H{"error": "different payment method required"})
-	case errors.Is(err, temporal.ErrNewMethodNotAllowed):
-		c.JSON(http.StatusBadRequest, gin.H{"error": "new payment method not allowed"})
-	case errors.Is(err, temporal.ErrMethodsExhausted):
-		c.JSON(http.StatusBadRequest, gin.H{"error": "payment methods exhausted"})
 	default:
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 	}

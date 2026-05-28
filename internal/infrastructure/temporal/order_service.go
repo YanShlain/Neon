@@ -147,90 +147,6 @@ func (s *OrderService) SubmitPayment(ctx context.Context, orderID string, code s
 	return last, fmt.Errorf("payment processing timeout")
 }
 
-// StartNewPaymentMethod signals the workflow to begin a new payment method slot.
-func (s *OrderService) StartNewPaymentMethod(ctx context.Context, orderID string) (booking.StatusResponse, error) {
-	before, err := s.GetStatus(ctx, orderID)
-	if err != nil {
-		return booking.StatusResponse{}, err
-	}
-	if before.Status.IsTerminal() {
-		return before, ErrTerminalOrder
-	}
-	if before.Status != domain.OrderStatusSeatsHeld {
-		return before, ErrNewMethodNotAllowed
-	}
-	beforeEvents := len(before.PaymentEvents)
-	beforeMethods := before.MethodsUsed
-
-	slog.Info("outbound temporal SignalWorkflow",
-		"signal", booking.SignalStartNewPaymentMethod,
-		"order_id", orderID,
-	)
-
-	if err := s.client.SignalWorkflow(ctx, orderID, "", booking.SignalStartNewPaymentMethod, struct{}{}); err != nil {
-		slog.Error("SignalWorkflow failed", "order_id", orderID, "error", err, "exc_info", err)
-		return booking.StatusResponse{}, mapTemporalError(err)
-	}
-
-	deadline := time.Now().Add(5 * time.Second)
-	var last booking.StatusResponse
-	for time.Now().Before(deadline) {
-		last, err = s.GetStatus(ctx, orderID)
-		if err != nil {
-			return booking.StatusResponse{}, err
-		}
-		if newMethodProcessingSettled(before, last, beforeEvents, beforeMethods) {
-			return last, mapNewMethodResultError(last)
-		}
-		time.Sleep(25 * time.Millisecond)
-	}
-	return last, fmt.Errorf("new payment method processing timeout")
-}
-
-func newMethodProcessingSettled(before, after booking.StatusResponse, beforeEvents, beforeMethods int) bool {
-	if after.MethodsUsed > beforeMethods {
-		return true
-	}
-	if len(after.PaymentEvents) > beforeEvents {
-		return true
-	}
-	if after.LastError != "" && after.LastError != before.LastError {
-		return true
-	}
-	return false
-}
-
-func mapNewMethodResultError(status booking.StatusResponse) error {
-	if status.Status.IsTerminal() {
-		return ErrTerminalOrder
-	}
-	if err := mapNewMethodStatusError(status.LastError); err != nil {
-		return err
-	}
-	if len(status.PaymentEvents) == 0 {
-		return nil
-	}
-	switch status.PaymentEvents[len(status.PaymentEvents)-1].Type {
-	case booking.PaymentEventMethodsExhausted:
-		return ErrMethodsExhausted
-	case booking.PaymentEventNewMethodNotAllowed:
-		return ErrNewMethodNotAllowed
-	default:
-		return nil
-	}
-}
-
-func mapNewMethodStatusError(lastError string) error {
-	switch lastError {
-	case "payment methods exhausted":
-		return ErrMethodsExhausted
-	case "new payment method not allowed", "payment in progress", "order terminal":
-		return ErrNewMethodNotAllowed
-	default:
-		return nil
-	}
-}
-
 func paymentProcessingSettled(before, after booking.StatusResponse, beforeEvents int) bool {
 	if after.Status == domain.OrderStatusConfirmed {
 		return true
@@ -267,14 +183,7 @@ func mapPaymentResultError(status booking.StatusResponse) error {
 	case booking.PaymentEventFormatInvalid:
 		return ErrInvalidPaymentCode
 	case booking.PaymentEventAttemptsExhausted:
-		return ErrPaymentAttemptsExhausted
-	case booking.PaymentEventMethodsExhausted:
-		if status.Status == domain.OrderStatusPaymentFailed {
-			return ErrTerminalOrder
-		}
-		return ErrMethodsExhausted
-	case booking.PaymentEventMethodChangeRequired:
-		return ErrDifferentPaymentMethodRequired
+		return ErrTerminalOrder
 	default:
 		return nil
 	}
@@ -284,14 +193,8 @@ func mapPaymentStatusError(lastError string) error {
 	switch lastError {
 	case "invalid payment code format":
 		return ErrInvalidPaymentCode
-	case "payment attempts exhausted":
-		return ErrPaymentAttemptsExhausted
 	case "payment not allowed":
 		return ErrPaymentNotAllowed
-	case "different payment method required":
-		return ErrDifferentPaymentMethodRequired
-	case "payment methods exhausted":
-		return ErrMethodsExhausted
 	default:
 		return nil
 	}
@@ -346,20 +249,8 @@ var ErrTerminalOrder = errors.New("order is terminal")
 // ErrInvalidPaymentCode indicates the payment code format is invalid.
 var ErrInvalidPaymentCode = errors.New("invalid payment code")
 
-// ErrPaymentAttemptsExhausted indicates too many failures for the current code.
-var ErrPaymentAttemptsExhausted = errors.New("payment attempts exhausted")
-
 // ErrPaymentNotAllowed indicates payment cannot be submitted in the current order state.
 var ErrPaymentNotAllowed = errors.New("payment not allowed")
-
-// ErrDifferentPaymentMethodRequired indicates a different code was submitted without starting a new method.
-var ErrDifferentPaymentMethodRequired = errors.New("different payment method required")
-
-// ErrNewMethodNotAllowed indicates StartNewPaymentMethod cannot be applied in the current state.
-var ErrNewMethodNotAllowed = errors.New("new payment method not allowed")
-
-// ErrMethodsExhausted indicates all payment method slots are used or the order failed payment.
-var ErrMethodsExhausted = errors.New("payment methods exhausted")
 
 // DescribeOrderStatus is a helper for HTTP mapping.
 func DescribeOrderStatus(status domain.OrderStatus) string {

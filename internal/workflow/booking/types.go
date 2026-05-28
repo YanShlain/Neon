@@ -17,15 +17,11 @@ type WorkflowInput struct {
 type PaymentEventType string
 
 const (
-	PaymentEventFormatInvalid         PaymentEventType = "format_invalid"
-	PaymentEventAttemptsExhausted     PaymentEventType = "attempts_exhausted"
-	PaymentEventValidationFailed      PaymentEventType = "validation_failed"
-	PaymentEventValidationSuccess     PaymentEventType = "validation_success"
-	PaymentEventMethodChangeRequired  PaymentEventType = "method_change_required"
-	PaymentEventNewMethodStarted      PaymentEventType = "new_method_started"
-	PaymentEventMethodsExhausted      PaymentEventType = "methods_exhausted"
-	PaymentEventNewMethodNotAllowed   PaymentEventType = "new_method_not_allowed"
-	PaymentEventRejectedByTimer       PaymentEventType = "rejected_by_timer"
+	PaymentEventFormatInvalid     PaymentEventType = "format_invalid"
+	PaymentEventAttemptsExhausted PaymentEventType = "attempts_exhausted"
+	PaymentEventValidationFailed  PaymentEventType = "validation_failed"
+	PaymentEventValidationSuccess PaymentEventType = "validation_success"
+	PaymentEventRejectedByTimer   PaymentEventType = "rejected_by_timer"
 )
 
 // PaymentEvent is an append-only audit entry for payment attempts.
@@ -37,16 +33,14 @@ type PaymentEvent struct {
 
 // StatusResponse is returned by GetStatus query and order API responses.
 type StatusResponse struct {
-	OrderID               string              `json:"order_id"`
-	FlightID              string              `json:"flight_id"`
-	Status                domain.OrderStatus  `json:"status"`
-	HeldSeatIDs           []string            `json:"held_seat_ids"`
-	TimerRemainingSeconds int                 `json:"timer_remaining_seconds"`
-	PaymentEvents         []PaymentEvent      `json:"payment_events"`
-	PaymentFailures       int                 `json:"payment_failures"`
-	MethodsUsed           int                 `json:"methods_used"`
-	MethodsRemaining      int                 `json:"methods_remaining"`
-	LastError             string              `json:"-"`
+	OrderID               string             `json:"order_id"`
+	FlightID              string             `json:"flight_id"`
+	Status                domain.OrderStatus `json:"status"`
+	HeldSeatIDs           []string           `json:"held_seat_ids"`
+	TimerRemainingSeconds int                `json:"timer_remaining_seconds"`
+	PaymentEvents         []PaymentEvent     `json:"payment_events"`
+	PaymentFailures       int                `json:"payment_failures"`
+	LastError             string             `json:"-"`
 }
 
 // UpdateSeatsRequest is the payload for UpdateSeats workflow update.

@@ -1,5 +1,5 @@
 (function initPaymentPage() {
-  const MAX_ATTEMPTS_PER_METHOD = 3;
+  const MAX_PAYMENT_ATTEMPTS = 3;
 
   const params = new URLSearchParams(window.location.search);
   const orderID = params.get("order_id") || getStoredOrderID();
@@ -24,14 +24,11 @@
   const submitBtn = document.getElementById("submit-btn");
   const errorEl = document.getElementById("error");
 
-  const CACHED_CODE_KEY = `neon_payment_method_code_${orderID}`;
-
   let timerSeconds = 0;
   let timerHandle = null;
   let latestOrder = null;
-  // The 5-digit code locked to the current server-side payment method slot.
-  // Persisted in sessionStorage so a page refresh retains context.
-  let cachedMethodCode = sessionStorage.getItem(CACHED_CODE_KEY) || "";
+  let orderStream = null;
+  let pollHandle = null;
 
   if (!orderID || !flightID) {
     showError(errorEl, "Missing order or flight. Return to seat selection.");
@@ -56,11 +53,13 @@
   });
 
   bootstrap();
+  window.addEventListener("beforeunload", stopLiveUpdates);
 
   async function bootstrap() {
     hideError(errorEl);
     try {
       await loadOrder();
+      startLiveUpdates();
     } catch (err) {
       showError(errorEl, err.message);
     }
@@ -71,46 +70,16 @@
     renderOrder(order);
   }
 
-  function setCachedMethodCode(code) {
-    cachedMethodCode = code;
-    if (code) {
-      sessionStorage.setItem(CACHED_CODE_KEY, code);
-    } else {
-      sessionStorage.removeItem(CACHED_CODE_KEY);
-    }
-  }
-
-  function getCurrentMethodCode(events) {
-    if (!events?.length) {
-      return "";
-    }
-    for (let i = events.length - 1; i >= 0; i--) {
-      if (events[i].type === "new_method_started") {
-        return "";
-      }
-      if (events[i].code) {
-        return events[i].code;
-      }
-    }
-    return "";
-  }
-
   function updateFormControls(order) {
     const failures = order.payment_failures ?? 0;
-    const methodsRemaining = order.methods_remaining ?? 0;
-    const attemptsExhausted = failures >= MAX_ATTEMPTS_PER_METHOD;
+    const attemptsExhausted = failures >= MAX_PAYMENT_ATTEMPTS;
     const typedCode = paymentCode.value.trim();
     const validInput = /^\d{5}$/.test(typedCode);
 
-    // After 3 failures: Submit only if a different code is typed and methods remain.
-    // Before 3 failures: Submit for any valid code; different code will get backend-rejected (U-D5).
-    const canSubmit =
-      order.status === "SEATS_HELD" &&
-      validInput &&
-      (!attemptsExhausted || (methodsRemaining > 0 && typedCode !== cachedMethodCode));
+    const canSubmit = order.status === "SEATS_HELD" && validInput && !attemptsExhausted;
 
     submitBtn.disabled = !canSubmit;
-    paymentCode.disabled = order.status !== "SEATS_HELD" || (attemptsExhausted && methodsRemaining === 0);
+    paymentCode.disabled = order.status !== "SEATS_HELD" || attemptsExhausted;
   }
 
   function renderOrder(order) {
@@ -118,13 +87,13 @@
     const failures = order.payment_failures ?? 0;
     const methodsUsed = order.methods_used ?? 0;
     const methodsRemaining = order.methods_remaining ?? 0;
-    const attemptsExhausted = failures >= MAX_ATTEMPTS_PER_METHOD;
+    const attemptsExhausted = failures >= MAX_PAYMENT_ATTEMPTS;
 
     orderStatusEl.textContent = order.status;
     heldSeatsEl.textContent = `Held seats: ${(order.held_seat_ids || []).join(", ") || "—"}`;
     methodsUsedEl.textContent = String(methodsUsed);
     methodsRemainingEl.textContent = String(methodsRemaining);
-    attemptsUsedEl.textContent = `${failures} / ${MAX_ATTEMPTS_PER_METHOD}`;
+    attemptsUsedEl.textContent = `${failures} / ${MAX_PAYMENT_ATTEMPTS}`;
     renderPaymentEvents(order.payment_events || []);
     timerSeconds = order.timer_remaining_seconds || 0;
     startTimer();
@@ -138,7 +107,6 @@
       paymentPanel.classList.add("hidden");
       showError(errorEl, terminalMessage(order.status));
       setStoredOrderID(null);
-      setCachedMethodCode("");
       setFormDisabled(true);
       return;
     }
@@ -160,21 +128,10 @@
     paymentPanel.classList.remove("hidden");
     confirmationPanel.classList.add("hidden");
 
-    // Sync cached method code from payment events after each server response.
-    const codeFromEvents = getCurrentMethodCode(order.payment_events || []);
-    if (codeFromEvents) {
-      setCachedMethodCode(codeFromEvents);
-    } else if (!cachedMethodCode && failures > 0) {
-      // Fallback: derive from the typed value on first failure
-      setCachedMethodCode(paymentCode.value.trim());
-    } else if (failures === 0) {
-      setCachedMethodCode("");
-    }
-
     updateFormControls(order);
 
-    if (attemptsExhausted && methodsRemaining > 0) {
-      showFeedback("Attempts exhausted for this code. Enter a different 5-digit code to continue.", "info");
+    if (attemptsExhausted) {
+      showFeedback("Payment attempts exhausted. The order has failed.", "error");
     }
   }
 
@@ -182,9 +139,6 @@
     const last = (order.payment_events || []).slice(-1)[0];
     if (!last) {
       return "";
-    }
-    if (last.type === "method_change_required") {
-      return last.message || "Start a new payment method before using a different code.";
     }
     return last.message || "";
   }
@@ -209,30 +163,12 @@
 
     setFormDisabled(true);
     try {
-      let order = latestOrder;
-      const failures = order?.payment_failures ?? 0;
-      const attemptsExhausted = failures >= MAX_ATTEMPTS_PER_METHOD;
-
-      // Auto-trigger new-method when attempts are exhausted and a different code was entered.
-      if (attemptsExhausted && cachedMethodCode !== "" && code !== cachedMethodCode) {
-        order = await postJSON(`/orders/${encodeURIComponent(orderID)}/payment/new-method`, {});
-        renderOrder(order);
-      }
-
-      order = await postJSON(`/orders/${encodeURIComponent(orderID)}/payment`, { code });
+      const order = await postJSON(`/orders/${encodeURIComponent(orderID)}/payment`, { code });
       renderOrder(order);
 
       if (order.status === "CONFIRMED") {
         setStoredOrderID(null);
-        setCachedMethodCode("");
         showConfirmation(order);
-        return;
-      }
-
-      const exhaustedAfterPay = (order.payment_failures ?? 0) >= MAX_ATTEMPTS_PER_METHOD;
-      const methodsRemaining = order.methods_remaining ?? 0;
-      if (exhaustedAfterPay && methodsRemaining > 0) {
-        showFeedback("Attempts exhausted for this code. Enter a different 5-digit code to continue.", "info");
         return;
       }
 
@@ -279,13 +215,7 @@
       case "format_invalid":
         return "Invalid code format";
       case "attempts_exhausted":
-        return "Attempts exhausted on current method";
-      case "method_change_required":
-        return "Different code rejected";
-      case "new_method_started":
-        return "New payment method started";
-      case "methods_exhausted":
-        return "All payment methods exhausted";
+        return "All payment attempts exhausted";
       case "rejected_by_timer":
         return "Payment rejected (timer expired)";
       default:
@@ -295,7 +225,7 @@
 
   function terminalMessage(status) {
     if (status === "PAYMENT_FAILED") {
-      return "All payment methods failed. Your hold has been released.";
+      return "Payment failed after 3 attempts. Your hold has been released.";
     }
     if (status === "EXPIRED") {
       return "Your hold expired. Seats have been released.";
@@ -320,6 +250,51 @@
   function hideFeedback() {
     paymentFeedback.classList.add("hidden");
     paymentFeedback.textContent = "";
+  }
+
+  function startLiveUpdates() {
+    stopLiveUpdates();
+    try {
+      orderStream = new EventSource(`/api/v1/orders/${encodeURIComponent(orderID)}/stream`);
+      orderStream.addEventListener("status", (event) => {
+        try {
+          const order = JSON.parse(event.data);
+          renderOrder(order);
+        } catch {
+          // ignore malformed stream payload
+        }
+      });
+      orderStream.onerror = () => {
+        stopLiveUpdates();
+        startOrderPolling();
+      };
+    } catch {
+      startOrderPolling();
+    }
+  }
+
+  function startOrderPolling() {
+    if (pollHandle) {
+      return;
+    }
+    pollHandle = setInterval(async () => {
+      try {
+        await loadOrder();
+      } catch {
+        // best effort polling
+      }
+    }, 2000);
+  }
+
+  function stopLiveUpdates() {
+    if (orderStream) {
+      orderStream.close();
+      orderStream = null;
+    }
+    if (pollHandle) {
+      clearInterval(pollHandle);
+      pollHandle = null;
+    }
   }
 
   function startTimer() {

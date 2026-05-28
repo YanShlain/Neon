@@ -24,6 +24,8 @@
   let latestSeats = [];
   let syncInFlight = false;
   let orderStatus = "";
+  let orderStream = null;
+  let pollHandle = null;
 
   if (!flightID) {
     loadingEl.classList.add("hidden");
@@ -37,6 +39,7 @@
   payBtn.addEventListener("click", () => goToPayment());
 
   bootstrap();
+  window.addEventListener("beforeunload", stopLiveUpdates);
 
   async function bootstrap() {
     if (!orderID) {
@@ -48,6 +51,7 @@
     orderPanel.classList.remove("hidden");
     orderIdEl.textContent = formatOrderDisplayID(orderID);
     await refreshAll();
+    startLiveUpdates();
   }
 
   async function refreshAll() {
@@ -76,6 +80,10 @@
 
   async function loadOrder() {
     const order = await fetchJSON(`/orders/${encodeURIComponent(orderID)}`);
+    applyOrderState(order);
+  }
+
+  function applyOrderState(order) {
     orderStatus = order.status;
     orderStatusEl.textContent = order.status;
     selectedSeats = new Set(order.held_seat_ids || []);
@@ -89,6 +97,53 @@
       if (order.status === "CANCELLED" || order.status === "EXPIRED" || order.status === "PAYMENT_FAILED") {
         showError(errorEl, terminalSeatsMessage(order.status));
       }
+    }
+  }
+
+  function startLiveUpdates() {
+    stopLiveUpdates();
+    try {
+      orderStream = new EventSource(`/api/v1/orders/${encodeURIComponent(orderID)}/stream`);
+      orderStream.addEventListener("status", async (event) => {
+        try {
+          const order = JSON.parse(event.data);
+          applyOrderState(order);
+          await loadSeatMap(flightID);
+        } catch {
+          // ignore malformed stream payload
+        }
+      });
+      orderStream.onerror = () => {
+        stopLiveUpdates();
+        startOrderPolling();
+      };
+    } catch {
+      startOrderPolling();
+    }
+  }
+
+  function startOrderPolling() {
+    if (pollHandle) {
+      return;
+    }
+    pollHandle = setInterval(async () => {
+      try {
+        await loadOrder();
+        await loadSeatMap(flightID);
+      } catch {
+        // best effort polling
+      }
+    }, 2000);
+  }
+
+  function stopLiveUpdates() {
+    if (orderStream) {
+      orderStream.close();
+      orderStream = null;
+    }
+    if (pollHandle) {
+      clearInterval(pollHandle);
+      pollHandle = null;
     }
   }
 

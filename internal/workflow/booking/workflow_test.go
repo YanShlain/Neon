@@ -117,7 +117,7 @@ func TestU_B0_TimerStartsOnWorkflowStart(t *testing.T) {
 	scheduleUpdateSeats(t, env, 2*time.Millisecond, []string{"1A"}, nil)
 	scheduleCancel(t, env, 2*time.Millisecond, nil)
 
-	executeBooking(env, "O1", "101", hold)
+	executeBooking(env, "O1", memory.Flight1ID, hold)
 }
 
 // U-B1: New order on 101 — First UpdateSeats [1A] — SEATS_HELD; timer refreshes to ≈15m
@@ -132,7 +132,7 @@ func TestU_B1_FirstSeatUpdateStartsTimer(t *testing.T) {
 	})
 	scheduleCancel(t, env, time.Millisecond, nil)
 
-	executeBooking(env, "O1", "101", hold)
+	executeBooking(env, "O1", memory.Flight1ID, hold)
 }
 
 // U-B2: Holding 1A; 8m elapsed — UpdateSeats [1A,1B] — Timer ≈15m
@@ -147,7 +147,7 @@ func TestU_B2_SeatChangeResetsTimer(t *testing.T) {
 	})
 	scheduleCancel(t, env, 8*time.Minute+time.Millisecond, nil)
 
-	executeBooking(env, "O1", "101", hold)
+	executeBooking(env, "O1", memory.Flight1ID, hold)
 }
 
 // U-B3: Holding 1A — UpdateSeats [2A] — 1A released; 2A held
@@ -158,7 +158,7 @@ func TestU_B3_SeatSwapReleasesPreviousSeats(t *testing.T) {
 	scheduleUpdateSeats(t, env, 0, []string{"1A"}, nil)
 	scheduleUpdateSeats(t, env, 50*time.Millisecond, []string{"2A"}, func(resp booking.StatusResponse) {
 		require.Equal(t, []string{"2A"}, resp.HeldSeatIDs)
-		list, err := s.seats.ListByFlight(t.Context(), "101")
+		list, err := s.seats.ListByFlight(t.Context(), memory.Flight1ID)
 		require.NoError(t, err)
 		for _, seat := range list {
 			switch seat.SeatID {
@@ -172,7 +172,7 @@ func TestU_B3_SeatSwapReleasesPreviousSeats(t *testing.T) {
 	})
 	scheduleCancel(t, env, 500*time.Millisecond, nil)
 
-	executeBooking(env, "O1", "101", hold)
+	executeBooking(env, "O1", memory.Flight1ID, hold)
 }
 
 // U-B4: Holding seats — CancelOrder — CANCELLED; seats free
@@ -185,9 +185,9 @@ func TestU_B4_CancelReleasesSeats(t *testing.T) {
 		require.Equal(t, domain.OrderStatusCancelled, resp.Status)
 	})
 
-	executeBooking(env, "O1", "101", hold)
+	executeBooking(env, "O1", memory.Flight1ID, hold)
 
-	list, err := s.seats.ListByFlight(t.Context(), "101")
+	list, err := s.seats.ListByFlight(t.Context(), memory.Flight1ID)
 	require.NoError(t, err)
 	for _, seat := range list {
 		if seat.SeatID == "1A" || seat.SeatID == "1B" {
@@ -201,7 +201,7 @@ func TestU_B5b_TimerExpiryWithoutSeats(t *testing.T) {
 	_, env := newSuite(t)
 	hold := 2 * time.Second
 
-	executeBooking(env, "O1", "101", hold)
+	executeBooking(env, "O1", memory.Flight1ID, hold)
 
 	status := queryStatus(t, env)
 	require.Equal(t, domain.OrderStatusExpired, status.Status)
@@ -214,12 +214,12 @@ func TestU_B5_TimerExpiryReleasesSeats(t *testing.T) {
 
 	scheduleUpdateSeats(t, env, 0, []string{"1A"}, nil)
 
-	executeBooking(env, "O1", "101", hold)
+	executeBooking(env, "O1", memory.Flight1ID, hold)
 
 	status := queryStatus(t, env)
 	require.Equal(t, domain.OrderStatusExpired, status.Status)
 
-	list, err := s.seats.ListByFlight(t.Context(), "101")
+	list, err := s.seats.ListByFlight(t.Context(), memory.Flight1ID)
 	require.NoError(t, err)
 	for _, seat := range list {
 		if seat.SeatID == "1A" {
@@ -233,11 +233,11 @@ func TestU_B6_HoldConflictSameFlight(t *testing.T) {
 	s, env := newSuite(t)
 	hold := 30 * time.Second
 
-	require.NoError(t, s.seats.TryHold(t.Context(), "101", []string{"1A"}, "O1"))
+	require.NoError(t, s.seats.TryHold(t.Context(), memory.Flight1ID, []string{"1A"}, "O1"))
 
 	scheduleUpdateSeatsExpectError(t, env, 0, []string{"1A"})
 	scheduleCancel(t, env, time.Millisecond, nil)
-	executeBooking(env, "O2", "101", hold)
+	executeBooking(env, "O2", memory.Flight1ID, hold)
 }
 
 // U-B7: O1 holds 1A on 101 — O2 holds 1A on 102 — O2 succeeds
@@ -247,12 +247,12 @@ func TestU_B7_IsolatedFlightsAllowSameSeatID(t *testing.T) {
 
 	scheduleUpdateSeats(t, env1, 0, []string{"1A"}, nil)
 	scheduleCancel(t, env1, time.Millisecond, nil)
-	executeBooking(env1, "O1", "101", hold)
+	executeBooking(env1, "O1", memory.Flight1ID, hold)
 
 	s2, env2 := newSuite(t)
 	scheduleUpdateSeats(t, env2, 0, []string{"1A"}, func(resp booking.StatusResponse) {
 		require.Equal(t, domain.OrderStatusSeatsHeld, resp.Status)
-		list, err := s2.seats.ListByFlight(t.Context(), "102")
+		list, err := s2.seats.ListByFlight(t.Context(), memory.Flight2ID)
 		require.NoError(t, err)
 		for _, seat := range list {
 			if seat.SeatID == "1A" {
@@ -262,7 +262,7 @@ func TestU_B7_IsolatedFlightsAllowSameSeatID(t *testing.T) {
 		}
 	})
 	scheduleCancel(t, env2, time.Millisecond, nil)
-	executeBooking(env2, "O2", "102", hold)
+	executeBooking(env2, "O2", memory.Flight2ID, hold)
 }
 
 func schedulePayment(t *testing.T, env *testsuite.TestWorkflowEnvironment, delay time.Duration, code string) {
@@ -288,12 +288,12 @@ func TestU_C1_PaymentSuccessConfirmsSeats(t *testing.T) {
 	scheduleUpdateSeats(t, env, 0, []string{"1A"}, nil)
 	schedulePayment(t, env, time.Millisecond, "12345")
 
-	executeBooking(env, "O1", "101", hold)
+	executeBooking(env, "O1", memory.Flight1ID, hold)
 
 	status := queryStatus(t, env)
 	require.Equal(t, domain.OrderStatusConfirmed, status.Status)
 
-	list, err := s.seats.ListByFlight(t.Context(), "101")
+	list, err := s.seats.ListByFlight(t.Context(), memory.Flight1ID)
 	require.NoError(t, err)
 	for _, seat := range list {
 		if seat.SeatID == "1A" {
@@ -311,7 +311,7 @@ func TestU_C2_PaymentRetryAfterFailure(t *testing.T) {
 	schedulePayment(t, env, time.Millisecond, "12345")
 	schedulePayment(t, env, 2*time.Millisecond, "12345")
 
-	executeBooking(env, "O1", "101", hold)
+	executeBooking(env, "O1", memory.Flight1ID, hold)
 
 	status := queryStatus(t, env)
 	require.Equal(t, domain.OrderStatusConfirmed, status.Status)
@@ -348,7 +348,7 @@ func TestU_C3_PaymentAttemptsExhausted(t *testing.T) {
 	}, 9*time.Millisecond)
 	scheduleCancel(t, env, 15*time.Millisecond, nil)
 
-	executeBooking(env, "O1", "101", hold)
+	executeBooking(env, "O1", memory.Flight1ID, hold)
 }
 
 // U-C4: Payment running — Query AWAITING_PAYMENT; timer running
@@ -363,7 +363,7 @@ func TestU_C4_AwaitingPaymentWhileValidationRuns(t *testing.T) {
 		require.Greater(t, resp.TimerRemainingSeconds, 0)
 	})
 
-	executeBooking(env, "O1", "101", hold)
+	executeBooking(env, "O1", memory.Flight1ID, hold)
 }
 
 // U-C5: Code 1234 — Format error; stays SEATS_HELD
@@ -381,7 +381,7 @@ func TestU_C5_InvalidPaymentCodeLength(t *testing.T) {
 	}, 2*time.Millisecond)
 	scheduleCancel(t, env, 5*time.Millisecond, nil)
 
-	executeBooking(env, "O1", "101", hold)
+	executeBooking(env, "O1", memory.Flight1ID, hold)
 }
 
 // U-C6: Code abcde — Format error
@@ -398,7 +398,7 @@ func TestU_C6_InvalidPaymentCodeLetters(t *testing.T) {
 	}, 2*time.Millisecond)
 	scheduleCancel(t, env, 5*time.Millisecond, nil)
 
-	executeBooking(env, "O1", "101", hold)
+	executeBooking(env, "O1", memory.Flight1ID, hold)
 }
 
 func scheduleNewPaymentMethod(t *testing.T, env *testsuite.TestWorkflowEnvironment, delay time.Duration) {
@@ -426,7 +426,7 @@ func TestU_D1_NewMethodResetsAttempts(t *testing.T) {
 	schedulePayment(t, env, 7*time.Millisecond, "22222")
 	scheduleCancel(t, env, 20*time.Millisecond, nil)
 
-	executeBooking(env, "O1", "101", hold)
+	executeBooking(env, "O1", memory.Flight1ID, hold)
 }
 
 // U-D2: 3 methods failed 3× each — Next attempt — Terminal failure
@@ -450,7 +450,7 @@ func TestU_D2_AllMethodsExhaustedTerminalFailure(t *testing.T) {
 	env.RegisterDelayedCallback(func() {
 		status := queryStatus(t, env)
 		require.Equal(t, domain.OrderStatusPaymentFailed, status.Status)
-		list, err := s.seats.ListByFlight(t.Context(), "101")
+		list, err := s.seats.ListByFlight(t.Context(), memory.Flight1ID)
 		require.NoError(t, err)
 		for _, seat := range list {
 			if seat.SeatID == "1A" {
@@ -458,7 +458,7 @@ func TestU_D2_AllMethodsExhaustedTerminalFailure(t *testing.T) {
 			}
 		}
 	}, delay+time.Millisecond)
-	executeBooking(env, "O1", "101", hold)
+	executeBooking(env, "O1", memory.Flight1ID, hold)
 }
 
 // U-D3: 3 methods used — New method signal — Rejected
@@ -486,7 +486,7 @@ func TestU_D3_NewMethodRejectedWhenMethodsExhausted(t *testing.T) {
 	}, delay+time.Millisecond)
 	scheduleCancel(t, env, delay+5*time.Millisecond, nil)
 
-	executeBooking(env, "O1", "101", hold)
+	executeBooking(env, "O1", memory.Flight1ID, hold)
 }
 
 // U-D4: Payment running; timer=0 — Timer branch — EXPIRED; payment rejected; seats free
@@ -498,7 +498,7 @@ func TestU_D4_TimerRejectsInFlightPayment(t *testing.T) {
 	scheduleUpdateSeats(t, env, 0, []string{"1A"}, nil)
 	schedulePayment(t, env, 100*time.Millisecond, "12345")
 
-	executeBooking(env, "O1", "101", hold)
+	executeBooking(env, "O1", memory.Flight1ID, hold)
 
 	status := queryStatus(t, env)
 	require.Equal(t, domain.OrderStatusExpired, status.Status)
@@ -510,7 +510,7 @@ func TestU_D4_TimerRejectsInFlightPayment(t *testing.T) {
 	}
 	require.True(t, foundRejection, "expected rejected_by_timer payment event")
 
-	list, err := s.seats.ListByFlight(t.Context(), "101")
+	list, err := s.seats.ListByFlight(t.Context(), memory.Flight1ID)
 	require.NoError(t, err)
 	for _, seat := range list {
 		if seat.SeatID == "1A" {
@@ -534,5 +534,5 @@ func TestU_D5_DifferentCodeWithoutNewMethodRejected(t *testing.T) {
 	}, 3*time.Millisecond)
 	scheduleCancel(t, env, 5*time.Millisecond, nil)
 
-	executeBooking(env, "O1", "101", hold)
+	executeBooking(env, "O1", memory.Flight1ID, hold)
 }

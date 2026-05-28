@@ -50,6 +50,14 @@ function formatDateTime(iso) {
   });
 }
 
+function formatOrderDisplayID(orderID) {
+  if (!orderID) {
+    return "—";
+  }
+  const compact = String(orderID).replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
+  return compact.slice(0, 8).padEnd(8, "0");
+}
+
 function formatTimer(totalSeconds) {
   const seconds = Math.max(0, totalSeconds);
   const m = Math.floor(seconds / 60);

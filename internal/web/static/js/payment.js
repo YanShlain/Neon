@@ -7,6 +7,7 @@
 
   const orderIdEl = document.getElementById("order-id");
   const orderStatusEl = document.getElementById("order-status");
+  const flightIdEl = document.getElementById("flight-id");
   const timerDisplay = document.getElementById("timer-display");
   const heldSeatsEl = document.getElementById("held-seats");
   const methodsUsedEl = document.getElementById("methods-used");
@@ -37,7 +38,10 @@
     return;
   }
 
-  orderIdEl.textContent = orderID.slice(0, 8) + "…";
+  orderIdEl.textContent = formatOrderDisplayID(orderID);
+  if (flightIdEl) {
+    flightIdEl.textContent = flightID;
+  }
   viewSeatsLink.href = `/seats?flight_id=${encodeURIComponent(flightID)}&order_id=${encodeURIComponent(orderID)}`;
 
   paymentForm.addEventListener("submit", (event) => {

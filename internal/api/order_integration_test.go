@@ -128,7 +128,7 @@ func TestI_B0_TimerStartsOnOrderCreate(t *testing.T) {
 	t.Setenv("HOLD_DURATION", "15m")
 	srv := newTestApp(t)
 
-	order := createOrder(t, srv, "101")
+	order := createOrder(t, srv, memory.Flight1ID)
 	if order.Status != "CREATED" {
 		t.Fatalf("status = %q, want CREATED", order.Status)
 	}
@@ -142,7 +142,7 @@ func TestI_B1_TimerRefreshAfterSeatChange(t *testing.T) {
 	t.Setenv("HOLD_DURATION", "15m")
 	srv := newTestApp(t)
 
-	order := createOrder(t, srv, "101")
+	order := createOrder(t, srv, memory.Flight1ID)
 	resp := patchJSON(t, srv.URL+"/api/v1/orders/"+order.OrderID+"/seats", map[string]any{
 		"seat_ids": []string{"1A"},
 	})
@@ -162,26 +162,26 @@ func TestI_B1_TimerRefreshAfterSeatChange(t *testing.T) {
 func TestI_B2_MultiFlightHoldIsolation(t *testing.T) {
 	srv := newTestApp(t)
 
-	o1 := createOrder(t, srv, "101")
+	o1 := createOrder(t, srv, memory.Flight1ID)
 	resp1 := patchJSON(t, srv.URL+"/api/v1/orders/"+o1.OrderID+"/seats", map[string]any{"seat_ids": []string{"1A"}})
 	if resp1.StatusCode != http.StatusOK {
 		t.Fatalf("order1 patch status = %d", resp1.StatusCode)
 	}
 
-	o2 := createOrder(t, srv, "102")
+	o2 := createOrder(t, srv, memory.Flight2ID)
 	resp2 := patchJSON(t, srv.URL+"/api/v1/orders/"+o2.OrderID+"/seats", map[string]any{"seat_ids": []string{"1A"}})
 	if resp2.StatusCode != http.StatusOK {
 		t.Fatalf("order2 patch status = %d", resp2.StatusCode)
 	}
 
-	seatsResp, err := http.Get(srv.URL + "/api/v1/flights/102/seats")
+	seatsResp, err := http.Get(srv.URL + "/api/v1/flights/" + memory.Flight2ID + "/seats")
 	if err != nil {
 		t.Fatalf("get seats: %v", err)
 	}
 	defer seatsResp.Body.Close()
 	raw, _ := io.ReadAll(seatsResp.Body)
 	if !strings.Contains(string(raw), `"seat_id":"1A"`) && !strings.Contains(string(raw), `"seat_id": "1A"`) {
-		t.Fatalf("expected seat 1A on flight 102")
+		t.Fatalf("expected seat 1A on flight %s", memory.Flight2ID)
 	}
 }
 
@@ -189,7 +189,7 @@ func TestI_B2_MultiFlightHoldIsolation(t *testing.T) {
 func TestI_B3_CancelOrderReleasesSeats(t *testing.T) {
 	srv := newTestApp(t)
 
-	order := createOrder(t, srv, "101")
+	order := createOrder(t, srv, memory.Flight1ID)
 	resp := patchJSON(t, srv.URL+"/api/v1/orders/"+order.OrderID+"/seats", map[string]any{"seat_ids": []string{"1A"}})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("patch status = %d", resp.StatusCode)
@@ -205,7 +205,7 @@ func TestI_B3_CancelOrderReleasesSeats(t *testing.T) {
 		t.Fatalf("status = %q, want CANCELLED", body.Status)
 	}
 
-	seatsResp, err := http.Get(srv.URL + "/api/v1/flights/101/seats")
+	seatsResp, err := http.Get(srv.URL + "/api/v1/flights/" + memory.Flight1ID + "/seats")
 	if err != nil {
 		t.Fatalf("get seats: %v", err)
 	}
@@ -231,7 +231,7 @@ func TestI_B4_OrderExpiresAfterHoldDuration(t *testing.T) {
 	t.Setenv("HOLD_DURATION", "2s")
 	srv := newTestApp(t)
 
-	order := createOrder(t, srv, "101")
+	order := createOrder(t, srv, memory.Flight1ID)
 	resp := patchJSON(t, srv.URL+"/api/v1/orders/"+order.OrderID+"/seats", map[string]any{"seat_ids": []string{"1A"}})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("patch status = %d", resp.StatusCode)
@@ -254,14 +254,14 @@ func TestI_B4_OrderExpiresAfterHoldDuration(t *testing.T) {
 func TestI_B5_HoldConflictReturns409(t *testing.T) {
 	srv := newTestApp(t)
 
-	o1 := createOrder(t, srv, "101")
+	o1 := createOrder(t, srv, memory.Flight1ID)
 	resp1 := patchJSON(t, srv.URL+"/api/v1/orders/"+o1.OrderID+"/seats", map[string]any{"seat_ids": []string{"1A"}})
 	if resp1.StatusCode != http.StatusOK {
 		t.Fatalf("order1 patch status = %d", resp1.StatusCode)
 	}
 	resp1.Body.Close()
 
-	o2 := createOrder(t, srv, "101")
+	o2 := createOrder(t, srv, memory.Flight1ID)
 	resp2 := patchJSON(t, srv.URL+"/api/v1/orders/"+o2.OrderID+"/seats", map[string]any{"seat_ids": []string{"1A"}})
 	if resp2.StatusCode != http.StatusConflict {
 		t.Fatalf("order2 patch status = %d, want 409", resp2.StatusCode)
@@ -294,7 +294,7 @@ func TestI_C1_PaymentHappyPath(t *testing.T) {
 	t.Setenv("PAYMENT_NEVER_FAIL", "1")
 	srv, seats := newTestServer(t)
 
-	order := createOrder(t, srv, "101")
+	order := createOrder(t, srv, memory.Flight1ID)
 	resp := patchJSON(t, srv.URL+"/api/v1/orders/"+order.OrderID+"/seats", map[string]any{"seat_ids": []string{"1A"}})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("patch status = %d", resp.StatusCode)
@@ -309,7 +309,7 @@ func TestI_C1_PaymentHappyPath(t *testing.T) {
 		t.Fatalf("status = %q, want CONFIRMED", body.Status)
 	}
 
-	list, err := seats.ListByFlight(t.Context(), "101")
+	list, err := seats.ListByFlight(t.Context(), memory.Flight1ID)
 	if err != nil {
 		t.Fatalf("list seats: %v", err)
 	}
@@ -327,7 +327,7 @@ func TestI_C2_PaymentRetryThenSucceed(t *testing.T) {
 	t.Setenv("PAYMENT_FAIL_UNTIL", "2")
 	srv := newTestApp(t)
 
-	order := createOrder(t, srv, "101")
+	order := createOrder(t, srv, memory.Flight1ID)
 	resp := patchJSON(t, srv.URL+"/api/v1/orders/"+order.OrderID+"/seats", map[string]any{"seat_ids": []string{"1A"}})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("patch status = %d", resp.StatusCode)
@@ -356,7 +356,7 @@ func TestI_C3_TimerDuringPayment(t *testing.T) {
 	t.Setenv("PAYMENT_VALIDATION_DELAY", "2s")
 	srv := newTestApp(t)
 
-	order := createOrder(t, srv, "101")
+	order := createOrder(t, srv, memory.Flight1ID)
 	resp := patchJSON(t, srv.URL+"/api/v1/orders/"+order.OrderID+"/seats", map[string]any{"seat_ids": []string{"1A"}})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("patch status = %d", resp.StatusCode)
@@ -392,7 +392,7 @@ func TestI_C3_TimerDuringPayment(t *testing.T) {
 func TestI_C4_InvalidPaymentCodeLengthAPI(t *testing.T) {
 	srv := newTestApp(t)
 
-	order := createOrder(t, srv, "101")
+	order := createOrder(t, srv, memory.Flight1ID)
 	resp := patchJSON(t, srv.URL+"/api/v1/orders/"+order.OrderID+"/seats", map[string]any{"seat_ids": []string{"1A"}})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("patch status = %d", resp.StatusCode)
@@ -414,7 +414,7 @@ func TestI_C4_InvalidPaymentCodeLengthAPI(t *testing.T) {
 func TestI_C5_InvalidPaymentCodeLettersAPI(t *testing.T) {
 	srv := newTestApp(t)
 
-	order := createOrder(t, srv, "101")
+	order := createOrder(t, srv, memory.Flight1ID)
 	resp := patchJSON(t, srv.URL+"/api/v1/orders/"+order.OrderID+"/seats", map[string]any{"seat_ids": []string{"1A"}})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("patch status = %d", resp.StatusCode)
@@ -437,7 +437,7 @@ func TestI_C6_PaymentAttemptsExhaustedAPI(t *testing.T) {
 	t.Setenv("PAYMENT_ALWAYS_FAIL", "1")
 	srv := newTestApp(t)
 
-	order := createOrder(t, srv, "101")
+	order := createOrder(t, srv, memory.Flight1ID)
 	resp := patchJSON(t, srv.URL+"/api/v1/orders/"+order.OrderID+"/seats", map[string]any{"seat_ids": []string{"1A"}})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("patch status = %d", resp.StatusCode)
@@ -465,7 +465,7 @@ func TestI_C7_PaymentOnConfirmedOrderRejected(t *testing.T) {
 	t.Setenv("PAYMENT_NEVER_FAIL", "1")
 	srv := newTestApp(t)
 
-	order := createOrder(t, srv, "101")
+	order := createOrder(t, srv, memory.Flight1ID)
 	resp := patchJSON(t, srv.URL+"/api/v1/orders/"+order.OrderID+"/seats", map[string]any{"seat_ids": []string{"1A"}})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("patch status = %d", resp.StatusCode)
@@ -502,7 +502,7 @@ func TestI_C8_PaymentUnknownOrder404(t *testing.T) {
 func TestI_C9_PaymentWithoutSeatsHeldRejected(t *testing.T) {
 	srv := newTestApp(t)
 
-	order := createOrder(t, srv, "101")
+	order := createOrder(t, srv, memory.Flight1ID)
 	_, code := submitPayment(t, srv, order.OrderID, "12345")
 	if code != http.StatusBadRequest {
 		t.Fatalf("payment status = %d, want 400", code)
@@ -518,7 +518,7 @@ func TestI_C9_PaymentWithoutSeatsHeldRejected(t *testing.T) {
 func TestI_C10_PaymentMissingBody400(t *testing.T) {
 	srv := newTestApp(t)
 
-	order := createOrder(t, srv, "101")
+	order := createOrder(t, srv, memory.Flight1ID)
 	resp := patchJSON(t, srv.URL+"/api/v1/orders/"+order.OrderID+"/seats", map[string]any{"seat_ids": []string{"1A"}})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("patch status = %d", resp.StatusCode)
@@ -563,7 +563,7 @@ func TestI_D1_MethodExhaustionReleasesSeats(t *testing.T) {
 	t.Setenv("PAYMENT_ALWAYS_FAIL", "1")
 	srv, seats := newTestServer(t)
 
-	order := createOrder(t, srv, "101")
+	order := createOrder(t, srv, memory.Flight1ID)
 	holdSeat(t, srv, order.OrderID)
 
 	codes := []string{"11111", "22222", "33333"}
@@ -598,7 +598,7 @@ func TestI_D1_MethodExhaustionReleasesSeats(t *testing.T) {
 		t.Fatalf("status = %q, want PAYMENT_FAILED", got.Status)
 	}
 
-	list, err := seats.ListByFlight(t.Context(), "101")
+	list, err := seats.ListByFlight(t.Context(), memory.Flight1ID)
 	if err != nil {
 		t.Fatalf("list seats: %v", err)
 	}
@@ -615,7 +615,7 @@ func TestI_D2_LatePaymentRejectedOnExpiry(t *testing.T) {
 	t.Setenv("PAYMENT_VALIDATION_DELAY", "5s")
 	srv := newTestApp(t)
 
-	order := createOrder(t, srv, "101")
+	order := createOrder(t, srv, memory.Flight1ID)
 	holdSeat(t, srv, order.OrderID)
 
 	done := make(chan struct {
@@ -656,7 +656,7 @@ func TestI_D3_NewMethodFlowRetrySuccess(t *testing.T) {
 	t.Setenv("PAYMENT_FAIL_UNTIL", "2")
 	srv := newTestApp(t)
 
-	order := createOrder(t, srv, "101")
+	order := createOrder(t, srv, memory.Flight1ID)
 	holdSeat(t, srv, order.OrderID)
 
 	for i := 0; i < 2; i++ {
@@ -686,7 +686,7 @@ func TestI_D4_TimerDecrementsDuringPayment(t *testing.T) {
 	t.Setenv("PAYMENT_VALIDATION_DELAY", "2s")
 	srv := newTestApp(t)
 
-	order := createOrder(t, srv, "101")
+	order := createOrder(t, srv, memory.Flight1ID)
 	holdSeat(t, srv, order.OrderID)
 
 	before := getOrder(t, srv, order.OrderID)
@@ -719,7 +719,7 @@ func TestI_D4_TimerDecrementsDuringPayment(t *testing.T) {
 func TestI_D5_GetOrderExposesPaymentCounters(t *testing.T) {
 	srv := newTestApp(t)
 
-	order := createOrder(t, srv, "101")
+	order := createOrder(t, srv, memory.Flight1ID)
 	holdSeat(t, srv, order.OrderID)
 
 	got := getOrder(t, srv, order.OrderID)
@@ -739,7 +739,7 @@ func TestI_D6_FourthPaymentAttemptRejected(t *testing.T) {
 	t.Setenv("PAYMENT_ALWAYS_FAIL", "1")
 	srv := newTestApp(t)
 
-	order := createOrder(t, srv, "101")
+	order := createOrder(t, srv, memory.Flight1ID)
 	holdSeat(t, srv, order.OrderID)
 
 	for i := 0; i < 3; i++ {
@@ -784,7 +784,7 @@ func TestI_D7_NewMethodRejectedWhenAllSlotsUsed(t *testing.T) {
 	t.Setenv("PAYMENT_ALWAYS_FAIL", "1")
 	srv := newTestApp(t)
 
-	order := createOrder(t, srv, "101")
+	order := createOrder(t, srv, memory.Flight1ID)
 	holdSeat(t, srv, order.OrderID)
 
 	for _, code := range []string{"11111", "22222"} {
@@ -823,7 +823,7 @@ func TestI_D8_NewMethodResetsFailuresAfterThreeAttempts(t *testing.T) {
 	t.Setenv("PAYMENT_ALWAYS_FAIL", "1")
 	srv := newTestApp(t)
 
-	order := createOrder(t, srv, "101")
+	order := createOrder(t, srv, memory.Flight1ID)
 	holdSeat(t, srv, order.OrderID)
 
 	for i := 0; i < 3; i++ {
@@ -856,7 +856,7 @@ func TestI_D9_DifferentCodeWithoutNewMethodRejected(t *testing.T) {
 	t.Setenv("PAYMENT_ALWAYS_FAIL", "1")
 	srv := newTestApp(t)
 
-	order := createOrder(t, srv, "101")
+	order := createOrder(t, srv, memory.Flight1ID)
 	holdSeat(t, srv, order.OrderID)
 
 	body, code := submitPayment(t, srv, order.OrderID, "11111")
@@ -886,7 +886,7 @@ func TestI_D9_DifferentCodeWithoutNewMethodRejected(t *testing.T) {
 func TestI_D10_NewMethodBeforeFirstPaymentRejected(t *testing.T) {
 	srv := newTestApp(t)
 
-	order := createOrder(t, srv, "101")
+	order := createOrder(t, srv, memory.Flight1ID)
 	holdSeat(t, srv, order.OrderID)
 
 	_, code := startNewPaymentMethod(t, srv, order.OrderID)

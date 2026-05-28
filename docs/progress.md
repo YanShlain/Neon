@@ -1,6 +1,6 @@
 # Neon — Implementation Progress
 
-**Last updated:** 2026-05-27  
+**Last updated:** 2026-05-28  
 **Branch:** `dev` (up to date with `origin/dev`)  
 **Canonical plan:** [docs/final_plan.md](final_plan.md)  
 **Requirements:** [docs/final_requierments.md](final_requierments.md)
@@ -25,7 +25,7 @@ Implement phases **MVP-A → MVP-E** one at a time. After each phase:
 | **MVP-B** | Holds, timer, cancel, booking UI | **Done** (user signed off) | U-B0–U-B7, I-B0–I-B5 ✅ |
 | **MVP-C** | Payment happy path | **Done** (user signed off) | U-C1–U-C6, I-C1–I-C10 ✅ |
 | **MVP-D** | Payment edge cases | **Done** (user signed off) | U-D1–U-D5, I-D1–I-D10 ✅ |
-| **MVP-E** | E2E polish | Not started | E-E1–E-E7 |
+| **MVP-E** | E2E polish | **Done** | E-E1–E-E7 ✅ |
 
 ---
 
@@ -187,6 +187,37 @@ Manual steps: [manual_tests.md](manual_tests.md) §6 (6.1 and 6.2 confirmed).
 
 ---
 
+## MVP-E — Complete ✅
+
+**Scope:** Playwright E2E coverage for full stakeholder journeys (S-1 through S-5) with stable local test orchestration.
+**Completed:** 2026-05-28
+
+### Deliverables
+
+- Extended Playwright suite in `tests/e2e/payment-attempts.spec.ts` to cover E-E1 through E-E7
+- Added deterministic test server bootstrap helper: `tests/e2e/helpers/server.ts`
+- Updated Playwright config for stable local execution: `playwright.config.ts`
+- Verified full backend regression safety with `go test ./...`
+
+### Tests
+
+| ID | Type | Scenario | Result |
+|----|------|----------|--------|
+| E-E1 | E2E | S-1 via UI happy path | ✅ |
+| E-E2 | E2E | S-2 timer refresh via UI | ✅ |
+| E-E3 | E2E | S-3 attempt exhaustion state via UI | ✅ |
+| E-E4 | E2E | S-4 timer vs in-flight payment race | ✅ |
+| E-E5 | E2E | S-5 multi-flight isolation | ✅ |
+| E-E6 | E2E | Multi-user map visibility (held seats) | ✅ |
+| E-E7 | E2E | Single active-order guard + rebook | ✅ |
+
+Validation commands:
+
+- `npx playwright test tests/e2e/payment-attempts.spec.ts`
+- `go test ./...`
+
+---
+
 ## Run locally (Windows)
 
 ```powershell
@@ -206,9 +237,9 @@ If port 8080 is busy: `netstat -ano | findstr ":8080"` then `Stop-Process -Id <P
 
 Use this block when onboarding a new agent:
 
-> **Continue Neon on branch `dev`.** MVP-A through MVP-D are **implemented and signed off**.  
-> **Next task: MVP-E only** (Playwright E2E) — when user asks to start it.  
-> Read `docs/progress.md`, `docs/final_plan.md`, and `docs/handoff.md` first.
+> **Continue Neon on branch `dev`.** MVP-A through MVP-E are **implemented**.  
+> Read `docs/progress.md`, `docs/final_plan.md`, and `docs/handoff.md` first.  
+> If needed, run final manual UI verification and prepare release/readme polish.
 
 ### Architecture reminders
 
@@ -240,10 +271,10 @@ Push when ready: `git push origin dev`
 
 ---
 
-## Next phase — MVP-E (not started)
+## Next phase
 
 | Phase | Focus |
 |-------|-------|
-| **MVP-E** | Playwright E2E, responsive polish |
+| **Post MVP-E** | Optional manual verification, release polish, deferred infra backlog |
 
 See [final_plan.md](final_plan.md) §8 for per-phase UI deliverables.

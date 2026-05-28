@@ -7,25 +7,25 @@
   <link rel="stylesheet" href="/css/app.css">
 </head>
 <body>
-  <header class="site-header">
-    <div class="container header-inner">
-      <a href="/" class="back-link">← Flights</a>
-      <h1 class="logo">Payment</h1>
+  <div class="brand-banner">
+    <div class="container brand-banner-inner">
+      <div class="brand-banner-start">
+        <a href="/" class="back-link back-link--banner">← Flights</a>
+        <p class="order-status order-status--banner">Status: <span id="order-status">—</span></p>
+      </div>
+      <div class="brand-banner-center">
+        <p class="banner-flight order-label--banner"><span id="flight-id">—</span></p>
+        <p class="order-label order-label--banner">Order <span id="order-id">—</span></p>
+      </div>
+      <div class="timer-wrap timer-wrap--banner">
+        <span class="timer-label">Hold timer</span>
+        <span id="timer-display" class="timer-display">—</span>
+      </div>
     </div>
-  </header>
+  </div>
 
   <main class="container">
     <section class="panel order-panel" id="order-panel">
-      <div class="toolbar-row">
-        <div>
-          <p class="order-label">Order <span id="order-id">—</span></p>
-          <p class="order-status">Status: <span id="order-status">—</span></p>
-        </div>
-        <div class="timer-wrap">
-          <span class="timer-label">Hold timer</span>
-          <span id="timer-display" class="timer-display">—</span>
-        </div>
-      </div>
       <p id="held-seats" class="selection-summary">Held seats: —</p>
       <div class="payment-counters">
         <span>Methods used: <strong id="methods-used">0</strong></span>

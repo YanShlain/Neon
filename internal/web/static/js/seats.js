@@ -46,7 +46,7 @@
     }
     setStoredOrderID(orderID);
     orderPanel.classList.remove("hidden");
-    orderIdEl.textContent = orderID.slice(0, 8) + "…";
+    orderIdEl.textContent = formatOrderDisplayID(orderID);
     await refreshAll();
   }
 
@@ -229,6 +229,27 @@
   }
 })();
 
+function splitColsAtAisle(cols) {
+  const dIndex = cols.indexOf("D");
+  if (dIndex <= 0) {
+    return { leftCols: cols, rightCols: [], hasAisle: false };
+  }
+  return {
+    leftCols: cols.slice(0, dIndex),
+    rightCols: cols.slice(dIndex),
+    hasAisle: true,
+  };
+}
+
+function appendSeatOrPlaceholder(grid, seatByKey, row, col, selectedSeats, onToggle, syncing) {
+  const seat = seatByKey.get(`${row}${col}`);
+  if (seat) {
+    grid.appendChild(seatCell(seat, selectedSeats, onToggle, syncing));
+  } else {
+    grid.appendChild(cell("corner", ""));
+  }
+}
+
 function parseSeatID(seatID) {
   const match = /^(\d+)([A-Z]+)$/.exec(seatID);
   if (!match) {
@@ -248,31 +269,41 @@ function renderSeatGrid(container, seats, selectedSeats, onToggle, syncing) {
   const rows = [...new Set(parsed.map((s) => s.pos.row))].sort((a, b) => a - b);
   const cols = [...new Set(parsed.map((s) => s.pos.col))].sort();
   const seatByKey = new Map(parsed.map((s) => [`${s.pos.row}${s.pos.col}`, s]));
+  const { leftCols, rightCols, hasAisle } = splitColsAtAisle(cols);
 
-  const grid = document.createElement("div");
-  grid.className = "seat-grid";
-  grid.style.gridTemplateColumns = `2rem repeat(${cols.length}, 2rem)`;
+  const rowLabelW = "1.75rem";
+  const seatW = "2rem";
+  const aisleW = "1.25rem";
+  const colTracks = [
+    rowLabelW,
+    ...leftCols.map(() => seatW),
+    ...(hasAisle ? [aisleW] : []),
+    ...rightCols.map(() => seatW),
+  ];
 
-  grid.appendChild(cell("corner", ""));
+  container.className = "seat-grid";
+  container.style.gridTemplateColumns = colTracks.join(" ");
+  container.replaceChildren();
 
-  cols.forEach((col) => {
-    grid.appendChild(cell("col-label", col));
-  });
+  container.appendChild(cell("corner", ""));
+  leftCols.forEach((col) => container.appendChild(cell("col-label", col)));
+  if (hasAisle) {
+    container.appendChild(cell("seat-aisle", ""));
+  }
+  rightCols.forEach((col) => container.appendChild(cell("col-label", col)));
 
   rows.forEach((row) => {
-    grid.appendChild(cell("row-label", String(row)));
-    cols.forEach((col) => {
-      const seat = seatByKey.get(`${row}${col}`);
-      if (seat) {
-        grid.appendChild(seatCell(seat, selectedSeats, onToggle, syncing));
-      } else {
-        grid.appendChild(cell("corner", ""));
-      }
+    container.appendChild(cell("row-label", String(row)));
+    leftCols.forEach((col) => {
+      appendSeatOrPlaceholder(container, seatByKey, row, col, selectedSeats, onToggle, syncing);
+    });
+    if (hasAisle) {
+      container.appendChild(cell("seat-aisle", ""));
+    }
+    rightCols.forEach((col) => {
+      appendSeatOrPlaceholder(container, seatByKey, row, col, selectedSeats, onToggle, syncing);
     });
   });
-
-  container.innerHTML = "";
-  container.appendChild(grid);
 }
 
 function cell(className, text) {

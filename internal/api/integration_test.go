@@ -38,11 +38,11 @@ func TestI_A1_GetFlightsReturnsAtLeastTwo(t *testing.T) {
 	}
 }
 
-// I-A2: Server with seed — GET /flights/101/seats — Full grid, all AVAILABLE
+// I-A2: Server with seed — GET /flights/Flight1ID/seats — Full grid, all AVAILABLE
 func TestI_A2_GetSeatMapAllAvailable(t *testing.T) {
 	srv, _ := newTestServer(t)
 
-	resp, err := http.Get(srv.URL + "/api/v1/flights/101/seats")
+	resp, err := http.Get(srv.URL + "/api/v1/flights/" + memory.Flight1ID + "/seats")
 	if err != nil {
 		t.Fatalf("GET seats: %v", err)
 	}
@@ -62,8 +62,8 @@ func TestI_A2_GetSeatMapAllAvailable(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if body.FlightID != "101" {
-		t.Fatalf("flight_id = %q, want 101", body.FlightID)
+	if body.FlightID != memory.Flight1ID {
+		t.Fatalf("flight_id = %q, want %s", body.FlightID, memory.Flight1ID)
 	}
 
 	expectedCount := len(memory.GenerateSeatIDs(10, 6))
@@ -77,16 +77,16 @@ func TestI_A2_GetSeatMapAllAvailable(t *testing.T) {
 	}
 }
 
-// I-A3: 1A HELD on 101 in repo — GET /flights/101/seats — 1A HELD
+// I-A3: 1A HELD on Flight1ID in repo — GET /flights/Flight1ID/seats — 1A HELD
 func TestI_A3_GetSeatMapShowsHeldSeat(t *testing.T) {
 	srv, seats := newTestServer(t)
 	ctx := context.Background()
 
-	if err := seats.TryHold(ctx, "101", []string{"1A"}, "O1"); err != nil {
+	if err := seats.TryHold(ctx, memory.Flight1ID, []string{"1A"}, "O1"); err != nil {
 		t.Fatalf("TryHold: %v", err)
 	}
 
-	resp, err := http.Get(srv.URL + "/api/v1/flights/101/seats")
+	resp, err := http.Get(srv.URL + "/api/v1/flights/" + memory.Flight1ID + "/seats")
 	if err != nil {
 		t.Fatalf("GET seats: %v", err)
 	}
@@ -152,7 +152,7 @@ func TestI_A4_GetRootServesFlightListUI(t *testing.T) {
 		t.Fatalf("read body: %v", err)
 	}
 	html := string(body)
-	if !containsAll(html, "Neon Air", "flights.js", "flight-grid") {
+	if !containsAll(html, "NEON Airlines", "flights.js", "flight-grid") {
 		t.Fatalf("unexpected HTML body: %q", html)
 	}
 }

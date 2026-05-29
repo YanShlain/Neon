@@ -40,6 +40,8 @@ type StatusResponse struct {
 	TimerRemainingSeconds int                `json:"timer_remaining_seconds"`
 	PaymentEvents         []PaymentEvent     `json:"payment_events"`
 	PaymentFailures       int                `json:"payment_failures"`
+	MethodsUsed           int                `json:"methods_used"`
+	MethodsRemaining      int                `json:"methods_remaining"`
 	LastError             string             `json:"-"`
 }
 

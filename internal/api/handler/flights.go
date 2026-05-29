@@ -25,7 +25,6 @@ func NewFlightHandler(flights domain.FlightRepository, seats domain.SeatReposito
 // ListFlights handles GET /api/v1/flights.
 func (h *FlightHandler) ListFlights(c *gin.Context) {
 	ctx := c.Request.Context()
-	slog.Info("inbound request", "method", c.Request.Method, "path", c.Request.URL.Path)
 
 	flights, err := h.flights.List(ctx)
 	if err != nil {
@@ -50,12 +49,6 @@ func (h *FlightHandler) GetSeatMap(c *gin.Context) {
 	ctx := c.Request.Context()
 	flightID := c.Param("flight_id")
 	orderID := c.Query("order_id")
-	slog.Info("inbound request",
-		"method", c.Request.Method,
-		"path", c.Request.URL.Path,
-		"flight_id", flightID,
-		"order_id", orderID,
-	)
 
 	seats, err := h.seats.ListByFlight(ctx, flightID)
 	if err != nil {

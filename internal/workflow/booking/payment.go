@@ -8,8 +8,9 @@ import (
 )
 
 const (
-	paymentFailureRate = 0.15
-	maxFailuresPerCode = 3
+	paymentFailureRate   = 0.15
+	maxAttemptsPerMethod = 3
+	maxPaymentMethods    = 3
 )
 
 // PaymentRNG supplies randomness for simulated payment failures (injectable in tests).
@@ -65,18 +66,6 @@ func PaymentRNGFromEnv() PaymentRNG {
 		return defaultPaymentRNG{}
 	}
 	return &seqPaymentRNG{failUntil: n}
-}
-
-func isValidPaymentCode(code string) bool {
-	if len(code) != 5 {
-		return false
-	}
-	for _, ch := range code {
-		if ch < '0' || ch > '9' {
-			return false
-		}
-	}
-	return true
 }
 
 func simulatePaymentFailure(rng PaymentRNG) bool {

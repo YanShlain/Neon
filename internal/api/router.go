@@ -1,6 +1,9 @@
 package api
 
 import (
+	"log/slog"
+	"time"
+
 	"github.com/gin-gonic/gin"
 
 	"neon/domain"
@@ -8,11 +11,25 @@ import (
 	"neon/internal/web"
 )
 
+func requestLogger() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		start := time.Now()
+		c.Next()
+		slog.Info("http",
+			"method", c.Request.Method,
+			"path", c.Request.URL.Path,
+			"status", c.Writer.Status(),
+			"latency_ms", time.Since(start).Milliseconds(),
+		)
+	}
+}
+
 // NewRouter registers MVP-A/B/C endpoints and static UI.
 func NewRouter(flights domain.FlightRepository, seats domain.SeatRepository, orders handler.OrderService) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	r.Use(gin.Recovery())
+	r.Use(requestLogger())
 
 	staticFS := web.MustFS()
 	web.Register(r, staticFS)

@@ -10,9 +10,9 @@ const (
 	TaskQueue            = "booking-task-queue"
 	Namespace            = "flight-booking"
 	QueryGetStatus       = "GetStatus"
-	UpdateUpdateSeats    = "UpdateSeats"
-	UpdateCancelOrder    = "CancelOrder"
-	SignalSubmitPayment = "SubmitPayment"
+	UpdateUpdateSeats   = "UpdateSeats"
+	UpdateCancelOrder   = "CancelOrder"
+	UpdateSubmitPayment = "SubmitPayment"
 )
 
 // HoldDuration returns hold timer length (15m default, overridable via HOLD_DURATION).

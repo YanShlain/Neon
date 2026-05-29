@@ -2,6 +2,7 @@ package booking
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"go.temporal.io/sdk/temporal"
@@ -28,16 +29,18 @@ func paymentActivityCtx(ctx workflow.Context) workflow.Context {
 }
 
 type workflowState struct {
-	OrderID         string
-	FlightID        string
-	HoldDuration    time.Duration
-	Status          domain.OrderStatus
-	HeldSeatIDs     []string
-	TimerDeadline   time.Time
-	CurrentCode     string
-	PaymentFailures int
-	PaymentEvents   []PaymentEvent
-	LastError       string
+	OrderID             string
+	FlightID            string
+	HoldDuration        time.Duration
+	Status              domain.OrderStatus
+	HeldSeatIDs         []string
+	TimerDeadline       time.Time
+	CurrentCode         string
+	CurrentCodeFailures int
+	MethodsUsed         int
+	PaymentFailures     int
+	PaymentEvents       []PaymentEvent
+	LastError           string
 }
 
 // BookingWorkflow orchestrates seat holds, payment, and the hold timer.
@@ -56,7 +59,6 @@ func BookingWorkflow(ctx workflow.Context, input WorkflowInput) error {
 
 	actCtx := activityCtx(ctx)
 	resetCh := workflow.NewBufferedChannel(ctx, 1)
-	paymentCh := workflow.GetSignalChannel(ctx, SignalSubmitPayment)
 
 	notifyTimerReset := func() {
 		resetCh.SendAsync(true)
@@ -99,7 +101,115 @@ func BookingWorkflow(ctx workflow.Context, input WorkflowInput) error {
 		return err
 	}
 
-	var paymentFuture workflow.Future
+	if err := workflow.SetUpdateHandler(ctx, UpdateSubmitPayment, func(updateCtx workflow.Context, req SubmitPaymentRequest) (StatusResponse, error) {
+		if state.Status.IsTerminal() {
+			if state.Status == domain.OrderStatusConfirmed {
+				return StatusResponse{}, temporal.NewApplicationError("payment not allowed", "payment_not_allowed")
+			}
+			return StatusResponse{}, temporal.NewApplicationError("order terminal", "terminal_order")
+		}
+		if state.Status != domain.OrderStatusSeatsHeld {
+			return StatusResponse{}, temporal.NewApplicationError("payment not allowed", "payment_not_allowed")
+		}
+		if !domain.IsValidPaymentCode(req.Code) {
+			return StatusResponse{}, temporal.NewApplicationError("invalid code", "invalid_payment_code")
+		}
+
+		if state.CurrentCode != "" && req.Code != state.CurrentCode {
+			if state.CurrentCodeFailures >= 1 {
+				state.MethodsUsed++
+				state.CurrentCodeFailures = 0
+			}
+		}
+
+		state.CurrentCode = req.Code
+		state.Status = domain.OrderStatusAwaitingPayment
+		state.LastError = ""
+
+		err := workflow.ExecuteActivity(paymentActivityCtx(updateCtx),
+			(*Activities).ValidatePayment,
+			PaymentValidationInput{Code: req.Code},
+		).Get(updateCtx, nil)
+
+		if state.Status.IsTerminal() {
+			notifyTimerReset()
+			return state.toResponse(workflow.Now(ctx)), nil
+		}
+
+		if err == nil {
+			if confirmErr := workflow.ExecuteActivity(activityCtx(updateCtx), (*Activities).ConfirmSeats, SeatMutationInput{
+				FlightID: state.FlightID,
+				SeatIDs:  cloneStrings(state.HeldSeatIDs),
+				OrderID:  state.OrderID,
+			}).Get(updateCtx, nil); confirmErr != nil {
+				state.Status = domain.OrderStatusSeatsHeld
+				state.appendPaymentEvent(PaymentEvent{
+					Type:    PaymentEventValidationFailed,
+					Code:    state.CurrentCode,
+					Message: "seat confirmation failed",
+				})
+				state.LastError = "seat confirmation failed"
+				notifyTimerReset()
+				return state.toResponse(workflow.Now(ctx)), confirmErr
+			}
+			state.Status = domain.OrderStatusConfirmed
+			state.TimerDeadline = time.Time{}
+			state.appendPaymentEvent(PaymentEvent{
+				Type: PaymentEventValidationSuccess,
+				Code: state.CurrentCode,
+			})
+			state.LastError = ""
+			notifyTimerReset()
+			return state.toResponse(workflow.Now(ctx)), nil
+		}
+
+		state.Status = domain.OrderStatusSeatsHeld
+
+		var appErr *temporal.ApplicationError
+		if errors.As(err, &appErr) && appErr.Type() == "invalid_payment_code" {
+			state.appendPaymentEvent(PaymentEvent{
+				Type:    PaymentEventFormatInvalid,
+				Code:    state.CurrentCode,
+				Message: "invalid payment code format",
+			})
+			state.LastError = "invalid payment code format"
+			notifyTimerReset()
+			return state.toResponse(workflow.Now(ctx)), nil
+		}
+
+		state.PaymentFailures++
+		state.CurrentCodeFailures++
+		state.appendPaymentEvent(PaymentEvent{
+			Type:    PaymentEventValidationFailed,
+			Code:    state.CurrentCode,
+			Message: "payment validation failed",
+		})
+
+		if state.CurrentCodeFailures >= maxAttemptsPerMethod {
+			code := state.CurrentCode
+			state.MethodsUsed++
+			state.CurrentCodeFailures = 0
+			state.CurrentCode = ""
+			if state.MethodsUsed >= maxPaymentMethods {
+				if failErr := failOrderPaymentExhausted(activityCtx(updateCtx), &state, code); failErr != nil {
+					return StatusResponse{}, failErr
+				}
+				notifyTimerReset()
+				return state.toResponse(workflow.Now(ctx)), nil
+			}
+			state.appendPaymentEvent(PaymentEvent{
+				Type:    PaymentEventAttemptsExhausted,
+				Code:    code,
+				Message: fmt.Sprintf("code %s exhausted (%d/%d methods used)", code, state.MethodsUsed, maxPaymentMethods),
+			})
+		}
+
+		state.LastError = "payment validation failed"
+		notifyTimerReset()
+		return state.toResponse(workflow.Now(ctx)), nil
+	}); err != nil {
+		return err
+	}
 
 	// --- Selector loop until terminal ---
 	for !state.Status.IsTerminal() {
@@ -112,10 +222,9 @@ func BookingWorkflow(ctx workflow.Context, input WorkflowInput) error {
 			remaining := deadline.Sub(workflow.Now(ctx))
 			if remaining <= 0 {
 				timerCancel()
-				if err := handleTimerExpiry(actCtx, ctx, &state, paymentFuture); err != nil {
+				if err := handleTimerExpiry(actCtx, &state); err != nil {
 					return err
 				}
-				paymentFuture = nil
 				continue
 			}
 			timerFuture = workflow.NewTimer(timerCtx, remaining)
@@ -123,9 +232,6 @@ func BookingWorkflow(ctx workflow.Context, input WorkflowInput) error {
 
 		expired := false
 		reset := false
-		paymentReceived := false
-		var paymentReq SubmitPaymentRequest
-		paymentDone := false
 
 		selector := workflow.NewSelector(ctx)
 		if timerFuture != nil {
@@ -141,16 +247,6 @@ func BookingWorkflow(ctx workflow.Context, input WorkflowInput) error {
 			c.Receive(ctx, &ignored)
 			reset = true
 		})
-		selector.AddReceive(paymentCh, func(c workflow.ReceiveChannel, more bool) {
-			c.Receive(ctx, &paymentReq)
-			paymentReceived = true
-		})
-		if paymentFuture != nil {
-			selector.AddFuture(paymentFuture, func(f workflow.Future) {
-				_ = f.Get(ctx, nil)
-				paymentDone = true
-			})
-		}
 		selector.Select(ctx)
 		if timerCancel != nil {
 			timerCancel()
@@ -159,144 +255,26 @@ func BookingWorkflow(ctx workflow.Context, input WorkflowInput) error {
 		if reset {
 			continue
 		}
-		if paymentReceived {
-			paymentFuture = startPaymentValidation(actCtx, paymentActivityCtx(ctx), &state, paymentReq)
-			continue
-		}
-		if paymentDone {
-			if state.Status.IsTerminal() {
-				paymentFuture = nil
-				continue
-			}
-			if err := completePaymentValidation(actCtx, &state, paymentFuture); err != nil {
-				return err
-			}
-			paymentFuture = nil
-			continue
-		}
 		if expired {
-			if err := handleTimerExpiry(actCtx, ctx, &state, paymentFuture); err != nil {
+			if err := handleTimerExpiry(actCtx, &state); err != nil {
 				return err
 			}
-			paymentFuture = nil
 		}
 	}
 	return nil
 }
 
-func handleTimerExpiry(actCtx, ctx workflow.Context, state *workflowState, paymentFuture workflow.Future) error {
-	if paymentFuture != nil && state.Status == domain.OrderStatusAwaitingPayment {
-		if err := rejectInFlightPayment(actCtx, state); err != nil {
-			return err
-		}
+func handleTimerExpiry(actCtx workflow.Context, state *workflowState) error {
+	if state.Status == domain.OrderStatusAwaitingPayment {
+		state.appendPaymentEvent(PaymentEvent{
+			Type:    PaymentEventRejectedByTimer,
+			Code:    state.CurrentCode,
+			Message: "payment rejected because hold timer expired",
+		})
+		state.CurrentCode = ""
+		state.LastError = ""
 	}
 	return expireOrder(actCtx, state)
-}
-
-func rejectInFlightPayment(ctx workflow.Context, state *workflowState) error {
-	code := state.CurrentCode
-	if err := workflow.ExecuteActivity(ctx, (*Activities).RejectInFlightPayment, PaymentValidationInput{
-		Code: code,
-	}).Get(ctx, nil); err != nil {
-		return err
-	}
-	state.Status = domain.OrderStatusSeatsHeld
-	state.appendPaymentEvent(PaymentEvent{
-		Type:    PaymentEventRejectedByTimer,
-		Code:    code,
-		Message: "payment rejected because hold timer expired",
-	})
-	state.LastError = ""
-	return nil
-}
-
-func startPaymentValidation(actCtx, payCtx workflow.Context, state *workflowState, req SubmitPaymentRequest) workflow.Future {
-	state.LastError = ""
-
-	if state.Status.IsTerminal() {
-		state.LastError = "order terminal"
-		return nil
-	}
-
-	if state.Status != domain.OrderStatusSeatsHeld {
-		state.appendPaymentEvent(PaymentEvent{
-			Type:    PaymentEventFormatInvalid,
-			Code:    req.Code,
-			Message: "payment not allowed in current status",
-		})
-		state.LastError = "payment not allowed"
-		return nil
-	}
-
-	if !isValidPaymentCode(req.Code) {
-		state.appendPaymentEvent(PaymentEvent{
-			Type:    PaymentEventFormatInvalid,
-			Code:    req.Code,
-			Message: "payment code must be exactly 5 digits",
-		})
-		state.LastError = "invalid payment code format"
-		return nil
-	}
-
-	state.CurrentCode = req.Code
-	state.Status = domain.OrderStatusAwaitingPayment
-	return workflow.ExecuteActivity(payCtx, (*Activities).ValidatePayment, PaymentValidationInput{Code: req.Code})
-}
-
-func completePaymentValidation(ctx workflow.Context, state *workflowState, paymentFuture workflow.Future) error {
-	if paymentFuture == nil || state.Status.IsTerminal() {
-		return nil
-	}
-
-	err := paymentFuture.Get(ctx, nil)
-	if err == nil {
-		if err := workflow.ExecuteActivity(ctx, (*Activities).ConfirmSeats, SeatMutationInput{
-			FlightID: state.FlightID,
-			SeatIDs:  cloneStrings(state.HeldSeatIDs),
-			OrderID:  state.OrderID,
-		}).Get(ctx, nil); err != nil {
-			state.Status = domain.OrderStatusSeatsHeld
-			state.appendPaymentEvent(PaymentEvent{
-				Type:    PaymentEventValidationFailed,
-				Code:    state.CurrentCode,
-				Message: "seat confirmation failed",
-			})
-			state.LastError = "seat confirmation failed"
-			return err
-		}
-		state.Status = domain.OrderStatusConfirmed
-		state.TimerDeadline = time.Time{}
-		state.appendPaymentEvent(PaymentEvent{
-			Type: PaymentEventValidationSuccess,
-			Code: state.CurrentCode,
-		})
-		state.LastError = ""
-		return nil
-	}
-
-	state.Status = domain.OrderStatusSeatsHeld
-	var appErr *temporal.ApplicationError
-	if errors.As(err, &appErr) && appErr.Type() == "invalid_payment_code" {
-		state.appendPaymentEvent(PaymentEvent{
-			Type:    PaymentEventFormatInvalid,
-			Code:    state.CurrentCode,
-			Message: "invalid payment code format",
-		})
-		state.LastError = "invalid payment code format"
-		return nil
-	}
-
-	state.PaymentFailures++
-	state.appendPaymentEvent(PaymentEvent{
-		Type:    PaymentEventValidationFailed,
-		Code:    state.CurrentCode,
-		Message: "payment validation failed",
-	})
-	if state.PaymentFailures >= maxFailuresPerCode {
-		return failOrderPaymentExhausted(ctx, state, state.CurrentCode)
-	}
-	state.LastError = "payment validation failed"
-	return nil
 }
 
 func failOrderPaymentExhausted(ctx workflow.Context, state *workflowState, code string) error {
@@ -351,8 +329,12 @@ func applySeatUpdate(ctx workflow.Context, state *workflowState, seatIDs []strin
 	}
 
 	state.HeldSeatIDs = cloneStrings(seatIDs)
-	state.Status = domain.OrderStatusSeatsHeld
-	state.TimerDeadline = workflow.Now(ctx).Add(state.HoldDuration)
+	if len(seatIDs) == 0 {
+		state.Status = domain.OrderStatusCreated
+	} else {
+		state.Status = domain.OrderStatusSeatsHeld
+		state.TimerDeadline = workflow.Now(ctx).Add(state.HoldDuration)
+	}
 	return nil
 }
 
@@ -373,6 +355,10 @@ func releaseHeldSeats(ctx workflow.Context, state *workflowState) error {
 }
 
 func (s workflowState) toResponse(now time.Time) StatusResponse {
+	methodsRemaining := maxPaymentMethods - s.MethodsUsed
+	if methodsRemaining < 0 {
+		methodsRemaining = 0
+	}
 	return StatusResponse{
 		OrderID:               s.OrderID,
 		FlightID:              s.FlightID,
@@ -381,6 +367,8 @@ func (s workflowState) toResponse(now time.Time) StatusResponse {
 		TimerRemainingSeconds: timerRemaining(s.TimerDeadline, now),
 		PaymentEvents:         clonePaymentEvents(s.PaymentEvents),
 		PaymentFailures:       s.PaymentFailures,
+		MethodsUsed:           s.MethodsUsed,
+		MethodsRemaining:      methodsRemaining,
 		LastError:             s.LastError,
 	}
 }

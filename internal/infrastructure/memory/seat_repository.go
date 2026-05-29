@@ -17,8 +17,7 @@ var (
 	ErrHoldConflict   = domain.ErrHoldConflict
 	ErrInvalidConfirm = domain.ErrInvalidConfirm
 
-	ErrSeatNotFound   = errors.New("seat not found")
-	ErrInvalidRelease = errors.New("seat not held by order")
+	ErrSeatNotFound = errors.New("seat not found")
 )
 
 // SeatRepository is an in-memory SeatRepository with per-flight locking.
@@ -97,25 +96,9 @@ func (r *SeatRepository) TryHold(ctx context.Context, flightID string, seatIDs [
 	mu.Lock()
 	defer mu.Unlock()
 
-	r.mu.RLock()
-	seats, ok := r.flights[flightID]
-	if !ok {
-		r.mu.RUnlock()
-		return fmt.Errorf("%w: %s", ErrFlightNotFound, flightID)
+	if err := r.checkAllAvailable(flightID, seatIDs); err != nil {
+		return err
 	}
-
-	for _, seatID := range seatIDs {
-		seat, found := seats[seatID]
-		if !found {
-			r.mu.RUnlock()
-			return fmt.Errorf("%w: %s", ErrSeatNotFound, seatID)
-		}
-		if seat.Status != domain.SeatStatusAvailable {
-			r.mu.RUnlock()
-			return ErrHoldConflict
-		}
-	}
-	r.mu.RUnlock()
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -124,6 +107,26 @@ func (r *SeatRepository) TryHold(ctx context.Context, flightID string, seatIDs [
 		seat.Status = domain.SeatStatusHeld
 		seat.OrderID = orderID
 		r.flights[flightID][seatID] = seat
+	}
+	return nil
+}
+
+func (r *SeatRepository) checkAllAvailable(flightID string, seatIDs []string) error {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	seats, ok := r.flights[flightID]
+	if !ok {
+		return fmt.Errorf("%w: %s", ErrFlightNotFound, flightID)
+	}
+	for _, seatID := range seatIDs {
+		seat, found := seats[seatID]
+		if !found {
+			return fmt.Errorf("%w: %s", ErrSeatNotFound, seatID)
+		}
+		if seat.Status != domain.SeatStatusAvailable {
+			return ErrHoldConflict
+		}
 	}
 	return nil
 }
@@ -151,7 +154,7 @@ func (r *SeatRepository) Release(ctx context.Context, flightID string, seatIDs [
 			return fmt.Errorf("%w: %s", ErrSeatNotFound, seatID)
 		}
 		if seat.Status != domain.SeatStatusHeld || seat.OrderID != orderID {
-			return ErrInvalidRelease
+			return domain.ErrInvalidRelease
 		}
 		seat.Status = domain.SeatStatusAvailable
 		seat.OrderID = ""

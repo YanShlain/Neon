@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/google/uuid"
 	enumspb "go.temporal.io/api/enums/v1"
@@ -104,118 +103,49 @@ func (s *OrderService) CancelOrder(ctx context.Context, orderID string) (booking
 	return resp, nil
 }
 
-// SubmitPayment signals payment validation and waits for workflow processing.
-// The context governs the total deadline; a 12-second internal deadline is added
-// on top to bound the polling loop independently of the caller's timeout.
+// SubmitPayment validates payment synchronously via workflow update.
 func (s *OrderService) SubmitPayment(ctx context.Context, orderID string, code string) (booking.StatusResponse, error) {
-	before, err := s.GetStatus(ctx, orderID)
-	if err != nil {
-		return booking.StatusResponse{}, err
-	}
-	if before.Status.IsTerminal() {
-		if before.Status == domain.OrderStatusConfirmed {
-			return before, ErrPaymentNotAllowed
-		}
-		return before, ErrTerminalOrder
-	}
-	if before.Status != domain.OrderStatusSeatsHeld {
-		return before, ErrPaymentNotAllowed
-	}
-	beforeEvents := len(before.PaymentEvents)
-
-	slog.Info("outbound temporal SignalWorkflow",
-		"signal", booking.SignalSubmitPayment,
+	slog.Info("outbound temporal UpdateWorkflow",
+		"update", booking.UpdateSubmitPayment,
 		"order_id", orderID,
 	)
 
-	if err := s.client.SignalWorkflow(ctx, orderID, "", booking.SignalSubmitPayment, booking.SubmitPaymentRequest{
-		Code: code,
-	}); err != nil {
-		slog.Error("SignalWorkflow failed", "order_id", orderID, "error", err)
-		return booking.StatusResponse{}, mapTemporalError(err)
+	handle, err := s.client.UpdateWorkflow(ctx, client.UpdateWorkflowOptions{
+		WorkflowID:   orderID,
+		UpdateName:   booking.UpdateSubmitPayment,
+		WaitForStage: client.WorkflowUpdateStageCompleted,
+		Args:         []interface{}{booking.SubmitPaymentRequest{Code: code}},
+	})
+	if err != nil {
+		return s.paymentErrorWithStatus(ctx, orderID, err)
 	}
 
-	// Poll until the workflow has processed the signal and settled into a new state.
-	// Uses a context-aware select so the goroutine terminates immediately if the
-	// caller cancels (e.g. HTTP client disconnects).
-	pollCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
-	defer cancel()
-
-	tick := time.NewTicker(25 * time.Millisecond)
-	defer tick.Stop()
-
-	var last booking.StatusResponse
-	for {
-		select {
-		case <-pollCtx.Done():
-			if errors.Is(pollCtx.Err(), context.DeadlineExceeded) {
-				slog.Error("payment processing timeout", "order_id", orderID)
-				return last, fmt.Errorf("payment processing timeout")
-			}
-			return last, pollCtx.Err()
-		case <-tick.C:
-			last, err = s.GetStatus(ctx, orderID)
-			if err != nil {
-				return booking.StatusResponse{}, err
-			}
-			if paymentProcessingSettled(before, last, beforeEvents) {
-				return last, mapPaymentResultError(last)
-			}
-		}
+	var resp booking.StatusResponse
+	if err := handle.Get(ctx, &resp); err != nil {
+		return s.paymentErrorWithStatus(ctx, orderID, err)
 	}
+	if resp.Status == domain.OrderStatusPaymentFailed {
+		return resp, ErrTerminalOrder
+	}
+	if resp.Status.IsTerminal() && resp.Status != domain.OrderStatusConfirmed {
+		return resp, ErrTerminalOrder
+	}
+	return resp, nil
 }
 
-func paymentProcessingSettled(before, after booking.StatusResponse, beforeEvents int) bool {
-	if after.Status == domain.OrderStatusConfirmed {
-		return true
+func (s *OrderService) paymentErrorWithStatus(ctx context.Context, orderID string, err error) (booking.StatusResponse, error) {
+	mapped := mapTemporalError(err)
+	status, qerr := s.GetStatus(ctx, orderID)
+	if qerr != nil {
+		return booking.StatusResponse{}, mapped
 	}
-	if after.Status.IsTerminal() {
-		return true
+	if status.Status == domain.OrderStatusConfirmed {
+		return status, ErrPaymentNotAllowed
 	}
-	if after.Status == domain.OrderStatusAwaitingPayment {
-		return false
+	if status.Status.IsTerminal() {
+		return status, ErrTerminalOrder
 	}
-	if len(after.PaymentEvents) > beforeEvents {
-		return true
-	}
-	if after.Status != before.Status {
-		return true
-	}
-	return false
-}
-
-func mapPaymentResultError(status booking.StatusResponse) error {
-	if status.Status == domain.OrderStatusPaymentFailed {
-		return ErrTerminalOrder
-	}
-	if status.Status.IsTerminal() && status.Status != domain.OrderStatusConfirmed {
-		return ErrTerminalOrder
-	}
-	if err := mapPaymentStatusError(status.LastError); err != nil {
-		return err
-	}
-	if len(status.PaymentEvents) == 0 {
-		return nil
-	}
-	switch status.PaymentEvents[len(status.PaymentEvents)-1].Type {
-	case booking.PaymentEventFormatInvalid:
-		return ErrInvalidPaymentCode
-	case booking.PaymentEventAttemptsExhausted:
-		return ErrTerminalOrder
-	default:
-		return nil
-	}
-}
-
-func mapPaymentStatusError(lastError string) error {
-	switch lastError {
-	case "invalid payment code format":
-		return ErrInvalidPaymentCode
-	case "payment not allowed":
-		return ErrPaymentNotAllowed
-	default:
-		return nil
-	}
+	return booking.StatusResponse{}, mapped
 }
 
 // GetStatus queries workflow state.
@@ -248,6 +178,10 @@ func mapTemporalError(err error) error {
 			return ErrTerminalOrder
 		case "payment_in_progress":
 			return ErrPaymentInProgress
+		case "payment_not_allowed":
+			return ErrPaymentNotAllowed
+		case "invalid_payment_code":
+			return ErrInvalidPaymentCode
 		}
 	}
 	var notFound *serviceerror.NotFound

@@ -45,7 +45,7 @@ func (s *OrderService) CreateOrder(ctx context.Context, flightID string) (bookin
 		HoldDuration: booking.HoldDuration(),
 	})
 	if err != nil {
-		slog.Error("StartWorkflow failed", "order_id", orderID, "error", err, "exc_info", err)
+		slog.Error("StartWorkflow failed", "order_id", orderID, "error", err)
 		return booking.StatusResponse{}, fmt.Errorf("start workflow: %w", err)
 	}
 
@@ -67,13 +67,13 @@ func (s *OrderService) UpdateSeats(ctx context.Context, orderID string, seatIDs 
 		Args:         []interface{}{booking.UpdateSeatsRequest{SeatIDs: seatIDs}},
 	})
 	if err != nil {
-		slog.Error("UpdateWorkflow failed", "order_id", orderID, "error", err, "exc_info", err)
+		slog.Error("UpdateWorkflow failed", "order_id", orderID, "error", err)
 		return booking.StatusResponse{}, mapTemporalError(err)
 	}
 
 	var resp booking.StatusResponse
 	if err := handle.Get(ctx, &resp); err != nil {
-		slog.Error("UpdateWorkflow result failed", "order_id", orderID, "error", err, "exc_info", err)
+		slog.Error("UpdateWorkflow result failed", "order_id", orderID, "error", err)
 		return booking.StatusResponse{}, mapTemporalError(err)
 	}
 	return resp, nil
@@ -92,18 +92,21 @@ func (s *OrderService) CancelOrder(ctx context.Context, orderID string) (booking
 		WaitForStage: client.WorkflowUpdateStageCompleted,
 	})
 	if err != nil {
-		slog.Error("CancelOrder update failed", "order_id", orderID, "error", err, "exc_info", err)
+		slog.Error("CancelOrder update failed", "order_id", orderID, "error", err)
 		return booking.StatusResponse{}, mapTemporalError(err)
 	}
 
 	var resp booking.StatusResponse
 	if err := handle.Get(ctx, &resp); err != nil {
+		slog.Error("CancelOrder result failed", "order_id", orderID, "error", err)
 		return booking.StatusResponse{}, mapTemporalError(err)
 	}
 	return resp, nil
 }
 
 // SubmitPayment signals payment validation and waits for workflow processing.
+// The context governs the total deadline; a 12-second internal deadline is added
+// on top to bound the polling loop independently of the caller's timeout.
 func (s *OrderService) SubmitPayment(ctx context.Context, orderID string, code string) (booking.StatusResponse, error) {
 	before, err := s.GetStatus(ctx, orderID)
 	if err != nil {
@@ -128,23 +131,38 @@ func (s *OrderService) SubmitPayment(ctx context.Context, orderID string, code s
 	if err := s.client.SignalWorkflow(ctx, orderID, "", booking.SignalSubmitPayment, booking.SubmitPaymentRequest{
 		Code: code,
 	}); err != nil {
-		slog.Error("SignalWorkflow failed", "order_id", orderID, "error", err, "exc_info", err)
+		slog.Error("SignalWorkflow failed", "order_id", orderID, "error", err)
 		return booking.StatusResponse{}, mapTemporalError(err)
 	}
 
-	deadline := time.Now().Add(12 * time.Second)
+	// Poll until the workflow has processed the signal and settled into a new state.
+	// Uses a context-aware select so the goroutine terminates immediately if the
+	// caller cancels (e.g. HTTP client disconnects).
+	pollCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	defer cancel()
+
+	tick := time.NewTicker(25 * time.Millisecond)
+	defer tick.Stop()
+
 	var last booking.StatusResponse
-	for time.Now().Before(deadline) {
-		last, err = s.GetStatus(ctx, orderID)
-		if err != nil {
-			return booking.StatusResponse{}, err
+	for {
+		select {
+		case <-pollCtx.Done():
+			if errors.Is(pollCtx.Err(), context.DeadlineExceeded) {
+				slog.Error("payment processing timeout", "order_id", orderID)
+				return last, fmt.Errorf("payment processing timeout")
+			}
+			return last, pollCtx.Err()
+		case <-tick.C:
+			last, err = s.GetStatus(ctx, orderID)
+			if err != nil {
+				return booking.StatusResponse{}, err
+			}
+			if paymentProcessingSettled(before, last, beforeEvents) {
+				return last, mapPaymentResultError(last)
+			}
 		}
-		if paymentProcessingSettled(before, last, beforeEvents) {
-			return last, mapPaymentResultError(last)
-		}
-		time.Sleep(25 * time.Millisecond)
 	}
-	return last, fmt.Errorf("payment processing timeout")
 }
 
 func paymentProcessingSettled(before, after booking.StatusResponse, beforeEvents int) bool {
@@ -209,7 +227,7 @@ func (s *OrderService) GetStatus(ctx context.Context, orderID string) (booking.S
 
 	resp, err := s.client.QueryWorkflow(ctx, orderID, "", booking.QueryGetStatus)
 	if err != nil {
-		slog.Error("QueryWorkflow failed", "order_id", orderID, "error", err, "exc_info", err)
+		slog.Error("QueryWorkflow failed", "order_id", orderID, "error", err)
 		return booking.StatusResponse{}, mapTemporalError(err)
 	}
 
@@ -228,6 +246,8 @@ func mapTemporalError(err error) error {
 			return ErrHoldConflict
 		case "terminal_order":
 			return ErrTerminalOrder
+		case "payment_in_progress":
+			return ErrPaymentInProgress
 		}
 	}
 	var notFound *serviceerror.NotFound
@@ -237,25 +257,26 @@ func mapTemporalError(err error) error {
 	return err
 }
 
-// ErrHoldConflict indicates a seat is already held by another order.
-var ErrHoldConflict = errors.New("seat hold conflict")
+// Sentinel errors returned by OrderService methods.
+var (
+	// ErrHoldConflict indicates a seat is already held by another order.
+	ErrHoldConflict = errors.New("seat hold conflict")
 
-// ErrOrderNotFound indicates the workflow does not exist.
-var ErrOrderNotFound = errors.New("order not found")
+	// ErrOrderNotFound indicates the workflow does not exist.
+	ErrOrderNotFound = errors.New("order not found")
 
-// ErrTerminalOrder indicates the order is in a terminal state.
-var ErrTerminalOrder = errors.New("order is terminal")
+	// ErrTerminalOrder indicates the order is in a terminal state.
+	ErrTerminalOrder = errors.New("order is terminal")
 
-// ErrInvalidPaymentCode indicates the payment code format is invalid.
-var ErrInvalidPaymentCode = errors.New("invalid payment code")
+	// ErrInvalidPaymentCode indicates the payment code format is invalid.
+	ErrInvalidPaymentCode = errors.New("invalid payment code")
 
-// ErrPaymentNotAllowed indicates payment cannot be submitted in the current order state.
-var ErrPaymentNotAllowed = errors.New("payment not allowed")
+	// ErrPaymentNotAllowed indicates payment cannot be submitted in the current order state.
+	ErrPaymentNotAllowed = errors.New("payment not allowed")
 
-// DescribeOrderStatus is a helper for HTTP mapping.
-func DescribeOrderStatus(status domain.OrderStatus) string {
-	return string(status)
-}
+	// ErrPaymentInProgress indicates a seat update was rejected because payment is being validated.
+	ErrPaymentInProgress = errors.New("payment in progress")
+)
 
 // WorkflowExecutionRunning checks whether a workflow exists and is running.
 func WorkflowExecutionRunning(ctx context.Context, c client.Client, orderID string) (bool, error) {

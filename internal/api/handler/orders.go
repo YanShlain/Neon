@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,53 +11,80 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"neon/domain"
 	"neon/internal/api/dto"
 	"neon/internal/infrastructure/temporal"
 	"neon/internal/workflow/booking"
 )
 
+// OrderService is the contract the presentation layer requires of the booking backend.
+// The concrete implementation lives in internal/infrastructure/temporal.
+type OrderService interface {
+	CreateOrder(ctx context.Context, flightID string) (booking.StatusResponse, error)
+	UpdateSeats(ctx context.Context, orderID string, seatIDs []string) (booking.StatusResponse, error)
+	CancelOrder(ctx context.Context, orderID string) (booking.StatusResponse, error)
+	SubmitPayment(ctx context.Context, orderID string, code string) (booking.StatusResponse, error)
+	GetStatus(ctx context.Context, orderID string) (booking.StatusResponse, error)
+}
+
 // OrderHandler serves booking order endpoints.
 type OrderHandler struct {
-	orders *temporal.OrderService
+	orders OrderService
 }
 
 // NewOrderHandler creates an OrderHandler.
-func NewOrderHandler(orders *temporal.OrderService) *OrderHandler {
+func NewOrderHandler(orders OrderService) *OrderHandler {
 	return &OrderHandler{orders: orders}
 }
 
 // CreateOrder handles POST /api/v1/orders.
 func (h *OrderHandler) CreateOrder(c *gin.Context) {
 	ctx := c.Request.Context()
-	slog.Info("inbound request", "method", c.Request.Method, "path", c.Request.URL.Path)
 
 	var req dto.CreateOrderRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		slog.Info("inbound request",
+			"method", c.Request.Method, "path", c.Request.URL.Path,
+			"bind_error", err,
+		)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		slog.Info("inbound response", "method", c.Request.Method, "path", c.Request.URL.Path, "status", http.StatusBadRequest)
 		return
 	}
+	slog.Info("inbound request",
+		"method", c.Request.Method, "path", c.Request.URL.Path,
+		"body", req,
+	)
 
 	status, err := h.orders.CreateOrder(ctx, req.FlightID)
 	if err != nil {
-		slog.Error("create order failed", "flight_id", req.FlightID, "error", err, "exc_info", err)
+		slog.Error("create order failed", "flight_id", req.FlightID, "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		slog.Info("inbound response", "method", c.Request.Method, "path", c.Request.URL.Path, "status", http.StatusInternalServerError)
 		return
 	}
 	c.JSON(http.StatusCreated, toOrderResponse(status))
+	slog.Info("inbound response", "method", c.Request.Method, "path", c.Request.URL.Path, "status", http.StatusCreated)
 }
 
 // UpdateSeats handles PATCH /api/v1/orders/:order_id/seats.
 func (h *OrderHandler) UpdateSeats(c *gin.Context) {
 	ctx := c.Request.Context()
 	orderID := c.Param("order_id")
-	slog.Info("inbound request", "method", c.Request.Method, "path", c.Request.URL.Path, "order_id", orderID)
 
 	var req dto.UpdateSeatsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		slog.Info("inbound request",
+			"method", c.Request.Method, "path", c.Request.URL.Path, "order_id", orderID,
+			"bind_error", err,
+		)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		slog.Info("inbound response", "method", c.Request.Method, "path", c.Request.URL.Path, "status", http.StatusBadRequest)
 		return
 	}
+	slog.Info("inbound request",
+		"method", c.Request.Method, "path", c.Request.URL.Path, "order_id", orderID,
+		"body", req,
+	)
 
 	status, err := h.orders.UpdateSeats(ctx, orderID, req.SeatIDs)
 	if err != nil {
@@ -64,6 +92,7 @@ func (h *OrderHandler) UpdateSeats(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, toOrderResponse(status))
+	slog.Info("inbound response", "method", c.Request.Method, "path", c.Request.URL.Path, "status", http.StatusOK)
 }
 
 // CancelOrder handles POST /api/v1/orders/:order_id/cancel.
@@ -78,21 +107,32 @@ func (h *OrderHandler) CancelOrder(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, toOrderResponse(status))
+	slog.Info("inbound response", "method", c.Request.Method, "path", c.Request.URL.Path, "status", http.StatusOK)
 }
 
 // SubmitPayment handles POST /api/v1/orders/:order_id/payment.
 func (h *OrderHandler) SubmitPayment(c *gin.Context) {
 	ctx := c.Request.Context()
 	orderID := c.Param("order_id")
-	slog.Info("inbound request", "method", c.Request.Method, "path", c.Request.URL.Path, "order_id", orderID)
 
 	var req dto.SubmitPaymentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		slog.Info("inbound request",
+			"method", c.Request.Method, "path", c.Request.URL.Path, "order_id", orderID,
+			"bind_error", err,
+		)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		slog.Info("inbound response", "method", c.Request.Method, "path", c.Request.URL.Path, "status", http.StatusBadRequest)
 		return
 	}
+	slog.Info("inbound request",
+		"method", c.Request.Method, "path", c.Request.URL.Path, "order_id", orderID,
+		"body", req,
+	)
+
 	if !isValidPaymentCode(req.Code) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payment code"})
+		slog.Info("inbound response", "method", c.Request.Method, "path", c.Request.URL.Path, "status", http.StatusBadRequest)
 		return
 	}
 
@@ -102,6 +142,7 @@ func (h *OrderHandler) SubmitPayment(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, toOrderResponse(status))
+	slog.Info("inbound response", "method", c.Request.Method, "path", c.Request.URL.Path, "status", http.StatusOK)
 }
 
 // GetOrder handles GET /api/v1/orders/:order_id.
@@ -116,9 +157,11 @@ func (h *OrderHandler) GetOrder(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, toOrderResponse(status))
+	slog.Info("inbound response", "method", c.Request.Method, "path", c.Request.URL.Path, "status", http.StatusOK)
 }
 
 // StreamOrder handles GET /api/v1/orders/:order_id/stream as Server-Sent Events.
+// The stream closes automatically when the order reaches a terminal state.
 func (h *OrderHandler) StreamOrder(c *gin.Context) {
 	ctx := c.Request.Context()
 	orderID := c.Param("order_id")
@@ -154,6 +197,9 @@ func (h *OrderHandler) StreamOrder(c *gin.Context) {
 	if !sendStatus(status) {
 		return
 	}
+	if status.Status.IsTerminal() {
+		return
+	}
 
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
@@ -168,6 +214,9 @@ func (h *OrderHandler) StreamOrder(c *gin.Context) {
 				return
 			}
 			if !sendStatus(status) {
+				return
+			}
+			if status.Status.IsTerminal() {
 				return
 			}
 		}
@@ -195,26 +244,32 @@ func toOrderResponse(status booking.StatusResponse) dto.OrderResponse {
 }
 
 func writeOrderError(c *gin.Context, orderID string, err error) {
-	slog.Error("order request failed", "order_id", orderID, "error", err, "exc_info", err)
+	slog.Error("order request failed", "order_id", orderID, "error", err)
+	var statusCode int
 	switch {
 	case errors.Is(err, temporal.ErrOrderNotFound):
-		c.JSON(http.StatusNotFound, gin.H{"error": "order not found"})
+		statusCode = http.StatusNotFound
+		c.JSON(statusCode, gin.H{"error": "order not found"})
 	case errors.Is(err, temporal.ErrHoldConflict):
-		c.JSON(http.StatusConflict, gin.H{"error": "seat hold conflict"})
+		statusCode = http.StatusConflict
+		c.JSON(statusCode, gin.H{"error": "seat hold conflict"})
+	case errors.Is(err, temporal.ErrPaymentInProgress):
+		statusCode = http.StatusConflict
+		c.JSON(statusCode, gin.H{"error": "payment in progress"})
 	case errors.Is(err, temporal.ErrTerminalOrder):
-		c.JSON(http.StatusGone, gin.H{"error": "order is terminal"})
+		statusCode = http.StatusGone
+		c.JSON(statusCode, gin.H{"error": "order is terminal"})
 	case errors.Is(err, temporal.ErrInvalidPaymentCode):
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payment code"})
+		statusCode = http.StatusBadRequest
+		c.JSON(statusCode, gin.H{"error": "invalid payment code"})
 	case errors.Is(err, temporal.ErrPaymentNotAllowed):
-		c.JSON(http.StatusBadRequest, gin.H{"error": "payment not allowed"})
+		statusCode = http.StatusBadRequest
+		c.JSON(statusCode, gin.H{"error": "payment not allowed"})
 	default:
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		statusCode = http.StatusInternalServerError
+		c.JSON(statusCode, gin.H{"error": "internal error"})
 	}
-}
-
-// IsTerminalStatus reports whether an order status cannot be modified.
-func IsTerminalStatus(status string) bool {
-	return domain.OrderStatus(status).IsTerminal()
+	slog.Info("inbound response", "method", c.Request.Method, "path", c.Request.URL.Path, "status", statusCode)
 }
 
 func isValidPaymentCode(code string) bool {

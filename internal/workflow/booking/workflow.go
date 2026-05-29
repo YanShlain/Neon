@@ -8,7 +8,6 @@ import (
 	"go.temporal.io/sdk/workflow"
 
 	"neon/domain"
-	"neon/internal/infrastructure/memory"
 )
 
 const (
@@ -342,15 +341,11 @@ func applySeatUpdate(ctx workflow.Context, state *workflowState, seatIDs []strin
 	}
 
 	if len(seatIDs) > 0 {
-		err := workflow.ExecuteActivity(ctx, (*Activities).HoldSeats, SeatMutationInput{
+		if err := workflow.ExecuteActivity(ctx, (*Activities).HoldSeats, SeatMutationInput{
 			FlightID: state.FlightID,
 			SeatIDs:  seatIDs,
 			OrderID:  state.OrderID,
-		}).Get(ctx, nil)
-		if err != nil {
-			if errors.Is(err, memory.ErrHoldConflict) {
-				return temporal.NewNonRetryableApplicationError("seat hold conflict", "hold_conflict", err)
-			}
+		}).Get(ctx, nil); err != nil {
 			return err
 		}
 	}

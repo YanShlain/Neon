@@ -434,6 +434,42 @@ func TestU_D4_TimerRejectsInFlightPayment(t *testing.T) {
 	}
 }
 
+// U-E1: UpdateSeats while AWAITING_PAYMENT is rejected with payment_in_progress error.
+func TestU_E1_UpdateSeatsRejectedWhileAwaitingPayment(t *testing.T) {
+	t.Setenv("PAYMENT_VALIDATION_DELAY", "2s")
+	_, env := newSuiteWithRNG(t, alwaysSucceedRNG{})
+	hold := 30 * time.Second
+
+	scheduleUpdateSeats(t, env, 0, []string{"1A"}, nil)
+	schedulePayment(t, env, time.Millisecond, "12345")
+	// At 500ms simulated time the payment activity (2s real-wall-clock sleep) is still running.
+	scheduleUpdateSeatsExpectError(t, env, 500*time.Millisecond, []string{"2A"})
+
+	executeBooking(env, "O1", memory.Flight1ID, hold)
+
+	// Payment succeeds after the activity finishes; held seat must still be 1A.
+	status := queryStatus(t, env)
+	require.Equal(t, domain.OrderStatusConfirmed, status.Status)
+	require.Equal(t, []string{"1A"}, status.HeldSeatIDs)
+}
+
+// U-E2: Payment signal when order has no seats held (CREATED) records format_invalid event.
+func TestU_E2_PaymentSignalWithNoSeatsHeldRecordsEvent(t *testing.T) {
+	_, env := newSuite(t)
+	hold := 30 * time.Second
+
+	schedulePayment(t, env, time.Millisecond, "12345")
+	env.RegisterDelayedCallback(func() {
+		status := queryStatus(t, env)
+		require.Equal(t, domain.OrderStatusCreated, status.Status)
+		require.NotEmpty(t, status.PaymentEvents)
+		require.Equal(t, booking.PaymentEventFormatInvalid, status.PaymentEvents[0].Type)
+	}, 2*time.Millisecond)
+	scheduleCancel(t, env, 3*time.Millisecond, nil)
+
+	executeBooking(env, "O1", memory.Flight1ID, hold)
+}
+
 // U-D5: A different 5-digit code can be used on any retry attempt.
 func TestU_D5_DifferentCodeSucceedsOnRetry(t *testing.T) {
 	_, env := newSuiteWithRNG(t, &seqFailRNG{failUntil: 1})

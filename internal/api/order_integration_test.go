@@ -1,16 +1,18 @@
 package api_test
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 
 	"neon/domain"
 	"neon/internal/app"
@@ -177,9 +179,26 @@ func TestI_B2_MultiFlightHoldIsolation(t *testing.T) {
 		t.Fatalf("get seats: %v", err)
 	}
 	defer seatsResp.Body.Close()
-	raw, _ := io.ReadAll(seatsResp.Body)
-	if !strings.Contains(string(raw), `"seat_id":"1A"`) && !strings.Contains(string(raw), `"seat_id": "1A"`) {
-		t.Fatalf("expected seat 1A on flight %s", memory.Flight2ID)
+	var seatMap2 struct {
+		Seats []struct {
+			SeatID string `json:"seat_id"`
+			Status string `json:"status"`
+		} `json:"seats"`
+	}
+	if err := json.NewDecoder(seatsResp.Body).Decode(&seatMap2); err != nil {
+		t.Fatalf("decode seats: %v", err)
+	}
+	found1A := false
+	for _, s := range seatMap2.Seats {
+		if s.SeatID == "1A" {
+			found1A = true
+			if s.Status != "HELD" {
+				t.Fatalf("flight2 seat 1A status = %q, want HELD", s.Status)
+			}
+		}
+	}
+	if !found1A {
+		t.Fatalf("seat 1A not found on flight %s", memory.Flight2ID)
 	}
 }
 
@@ -538,19 +557,6 @@ func TestI_C10_PaymentMissingBody400(t *testing.T) {
 	}
 }
 
-func startNewPaymentMethod(t *testing.T, srv *httptest.Server, orderID string) (orderBody, int) {
-	t.Helper()
-	resp, err := http.Post(srv.URL+"/api/v1/orders/"+orderID+"/payment/new-method", "application/json", nil)
-	if err != nil {
-		t.Fatalf("new payment method: %v", err)
-	}
-	defer resp.Body.Close()
-	var body orderBody
-	if resp.StatusCode == http.StatusOK {
-		body = decodeOrder(t, resp)
-	}
-	return body, resp.StatusCode
-}
 
 func holdSeat(t *testing.T, srv *httptest.Server, orderID string) {
 	t.Helper()
@@ -637,8 +643,8 @@ func TestI_D2_LatePaymentRejectedOnExpiry(t *testing.T) {
 	}
 
 	result := <-done
-	if result.code != http.StatusGone && result.code != http.StatusOK {
-		t.Fatalf("payment response status = %d", result.code)
+	if result.code != http.StatusGone {
+		t.Fatalf("payment response on expired order = %d, want 410", result.code)
 	}
 }
 
@@ -750,42 +756,6 @@ func TestI_D6_ThirdPaymentAttemptIsTerminal(t *testing.T) {
 	}
 }
 
-// I-D7: New method endpoint is rejected (feature disabled by requirements).
-func TestI_D7_NewMethodRejected(t *testing.T) {
-	srv := newTestApp(t)
-
-	order := createOrder(t, srv, memory.Flight1ID)
-	holdSeat(t, srv, order.OrderID)
-
-	_, codeHTTP := startNewPaymentMethod(t, srv, order.OrderID)
-	if codeHTTP != http.StatusBadRequest {
-		t.Fatalf("new-method status = %d, want 400", codeHTTP)
-	}
-}
-
-// I-D8: New method remains rejected after failures.
-func TestI_D8_NewMethodRejectedAfterFailures(t *testing.T) {
-	t.Setenv("PAYMENT_ALWAYS_FAIL", "1")
-	srv := newTestApp(t)
-
-	order := createOrder(t, srv, memory.Flight1ID)
-	holdSeat(t, srv, order.OrderID)
-
-	for i := 0; i < 2; i++ {
-		body, code := submitPayment(t, srv, order.OrderID, "11111")
-		if code != http.StatusOK {
-			t.Fatalf("attempt %d status = %d", i+1, code)
-		}
-		if body.PaymentFailures != i+1 {
-			t.Fatalf("attempt %d payment_failures = %d, want %d", i+1, body.PaymentFailures, i+1)
-		}
-	}
-
-	_, code := startNewPaymentMethod(t, srv, order.OrderID)
-	if code != http.StatusBadRequest {
-		t.Fatalf("new method status = %d, want 400", code)
-	}
-}
 
 // I-D9: Different code without new-method remains allowed while attempts remain.
 func TestI_D9_DifferentCodeWithoutNewMethodAllowed(t *testing.T) {
@@ -818,15 +788,77 @@ func TestI_D9_DifferentCodeWithoutNewMethodAllowed(t *testing.T) {
 	}
 }
 
-// I-D10: New method before any payment — HTTP 400.
-func TestI_D10_NewMethodBeforeFirstPaymentRejected(t *testing.T) {
+// I-E1: UpdateSeats while order is AWAITING_PAYMENT returns 409.
+func TestI_E1_UpdateSeatsWhileAwaitingPaymentReturns409(t *testing.T) {
+	t.Setenv("PAYMENT_NEVER_FAIL", "1")
+	t.Setenv("PAYMENT_VALIDATION_DELAY", "2s")
 	srv := newTestApp(t)
 
 	order := createOrder(t, srv, memory.Flight1ID)
 	holdSeat(t, srv, order.OrderID)
 
-	_, code := startNewPaymentMethod(t, srv, order.OrderID)
-	if code != http.StatusBadRequest {
-		t.Fatalf("new method before payment status = %d, want 400", code)
+	done := make(chan struct{}, 1)
+	go func() {
+		_, _ = submitPayment(t, srv, order.OrderID, "12345")
+		done <- struct{}{}
+	}()
+
+	// Wait until payment is in flight.
+	time.Sleep(300 * time.Millisecond)
+	mid := getOrder(t, srv, order.OrderID)
+	require.Equal(t, "AWAITING_PAYMENT", mid.Status)
+
+	// UpdateSeats during payment must be rejected with 409.
+	updateBody, _ := json.Marshal(map[string]any{"seat_ids": []string{"2A"}})
+	updateReq, _ := http.NewRequest(http.MethodPatch, srv.URL+"/api/v1/orders/"+order.OrderID+"/seats", bytes.NewReader(updateBody))
+	updateReq.Header.Set("Content-Type", "application/json")
+	updateResp, err := http.DefaultClient.Do(updateReq)
+	if err != nil {
+		t.Fatalf("patch seats: %v", err)
+	}
+	updateResp.Body.Close()
+	if updateResp.StatusCode != http.StatusConflict {
+		t.Fatalf("update-seats-while-awaiting status = %d, want 409", updateResp.StatusCode)
+	}
+
+	<-done
+}
+
+// I-E2: SSE stream closes automatically once the order reaches a terminal state.
+func TestI_E2_StreamOrderClosesOnTerminalStatus(t *testing.T) {
+	srv := newTestApp(t)
+
+	order := createOrder(t, srv, memory.Flight1ID)
+
+	cancelResp, err := http.Post(srv.URL+"/api/v1/orders/"+order.OrderID+"/cancel", "application/json", nil)
+	require.NoError(t, err)
+	cancelResp.Body.Close()
+
+	resp, err := http.Get(srv.URL + "/api/v1/orders/" + order.OrderID + "/stream")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	// Read SSE events until EOF. The handler must close the stream after the
+	// terminal event; we enforce a 5-second upper bound to catch hangs.
+	eventReceived := false
+	done := make(chan error, 1)
+	go func() {
+		scanner := bufio.NewScanner(resp.Body)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if strings.HasPrefix(line, "data:") {
+				eventReceived = true
+			}
+		}
+		done <- scanner.Err()
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+		require.True(t, eventReceived, "expected at least one SSE event")
+	case <-time.After(5 * time.Second):
+		t.Fatal("SSE stream did not close after terminal status within 5s")
 	}
 }

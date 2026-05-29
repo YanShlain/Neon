@@ -5,12 +5,11 @@ import (
 
 	"neon/domain"
 	"neon/internal/api/handler"
-	"neon/internal/infrastructure/temporal"
 	"neon/internal/web"
 )
 
 // NewRouter registers MVP-A/B/C endpoints and static UI.
-func NewRouter(flights domain.FlightRepository, seats domain.SeatRepository, orders *temporal.OrderService) *gin.Engine {
+func NewRouter(flights domain.FlightRepository, seats domain.SeatRepository, orders handler.OrderService) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	r.Use(gin.Recovery())

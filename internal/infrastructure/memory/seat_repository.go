@@ -11,11 +11,14 @@ import (
 )
 
 var (
-	ErrFlightNotFound   = errors.New("flight not found")
-	ErrSeatNotFound     = errors.New("seat not found")
-	ErrHoldConflict     = errors.New("seat hold conflict")
-	ErrInvalidRelease   = errors.New("seat not held by order")
-	ErrInvalidConfirm   = errors.New("seat not held by order for confirm")
+	// ErrFlightNotFound and ErrHoldConflict are aliases to the domain sentinels so
+	// callers can use either package for errors.Is checks.
+	ErrFlightNotFound = domain.ErrFlightNotFound
+	ErrHoldConflict   = domain.ErrHoldConflict
+	ErrInvalidConfirm = domain.ErrInvalidConfirm
+
+	ErrSeatNotFound   = errors.New("seat not found")
+	ErrInvalidRelease = errors.New("seat not held by order")
 )
 
 // SeatRepository is an in-memory SeatRepository with per-flight locking.

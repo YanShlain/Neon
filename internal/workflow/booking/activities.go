@@ -9,7 +9,6 @@ import (
 	"go.temporal.io/sdk/temporal"
 
 	"neon/domain"
-	"neon/internal/infrastructure/memory"
 )
 
 // Activities perform seat mutations and payment simulation for the booking workflow.
@@ -35,7 +34,7 @@ type SeatMutationInput struct {
 // HoldSeats marks seats as held for an order.
 func (a *Activities) HoldSeats(ctx context.Context, in SeatMutationInput) error {
 	if err := a.Seats.TryHold(ctx, in.FlightID, in.SeatIDs, in.OrderID); err != nil {
-		if errors.Is(err, memory.ErrHoldConflict) {
+		if errors.Is(err, domain.ErrHoldConflict) {
 			return temporal.NewNonRetryableApplicationError("seat hold conflict", "hold_conflict", err)
 		}
 		return err
@@ -81,7 +80,7 @@ func (a *Activities) ConfirmSeats(ctx context.Context, in SeatMutationInput) err
 		return nil
 	}
 	if err := a.Seats.Confirm(ctx, in.FlightID, in.SeatIDs, in.OrderID); err != nil {
-		if errors.Is(err, memory.ErrInvalidConfirm) {
+		if errors.Is(err, domain.ErrInvalidConfirm) {
 			return temporal.NewNonRetryableApplicationError("seat confirm failed", "seat_confirm_failed", err)
 		}
 		return err

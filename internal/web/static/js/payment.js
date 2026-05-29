@@ -10,8 +10,6 @@
   const flightIdEl = document.getElementById("flight-id");
   const timerDisplay = document.getElementById("timer-display");
   const heldSeatsEl = document.getElementById("held-seats");
-  const methodsUsedEl = document.getElementById("methods-used");
-  const methodsRemainingEl = document.getElementById("methods-remaining");
   const attemptsUsedEl = document.getElementById("attempts-used");
   const paymentEventsEl = document.getElementById("payment-events");
   const paymentPanel = document.getElementById("payment-panel");
@@ -85,14 +83,10 @@
   function renderOrder(order) {
     latestOrder = order;
     const failures = order.payment_failures ?? 0;
-    const methodsUsed = order.methods_used ?? 0;
-    const methodsRemaining = order.methods_remaining ?? 0;
     const attemptsExhausted = failures >= MAX_PAYMENT_ATTEMPTS;
 
     orderStatusEl.textContent = order.status;
     heldSeatsEl.textContent = `Held seats: ${(order.held_seat_ids || []).join(", ") || "—"}`;
-    methodsUsedEl.textContent = String(methodsUsed);
-    methodsRemainingEl.textContent = String(methodsRemaining);
     attemptsUsedEl.textContent = `${failures} / ${MAX_PAYMENT_ATTEMPTS}`;
     renderPaymentEvents(order.payment_events || []);
     timerSeconds = order.timer_remaining_seconds || 0;

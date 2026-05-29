@@ -1,7 +1,7 @@
 # Design Overview: Neon Flight Booking System
 
 > **Status:** Reflects current implementation  
-> **Last updated:** 2026-05-28  
+> **Last updated:** 2026-05-29  
 > **Related:** [final_requierments.md](final_requierments.md) · [final_plan.md](final_plan.md) · [README.md](../README.md)
 
 ---
@@ -49,7 +49,7 @@ flowchart TB
   UI --> API
   API --> TC
   API -->|GET seats| SR
-  TC -->|start / update / signal / query| WF
+  TC -->|start / update / query| WF
   WF --> ACT
   ACT --> FR
   ACT --> SR
@@ -88,11 +88,11 @@ stateDiagram-v2
   SEATS_HELD --> AWAITING_PAYMENT: POST /payment
   AWAITING_PAYMENT --> SEATS_HELD: validation failed
   AWAITING_PAYMENT --> CONFIRMED: validation success
-  AWAITING_PAYMENT --> SEATS_HELD: timer expiry (rejected_by_timer)
+  AWAITING_PAYMENT --> EXPIRED: timer expiry (rejected_by_timer)
   SEATS_HELD --> EXPIRED: timer expiry
   CREATED --> EXPIRED: timer expiry
-  SEATS_HELD --> PAYMENT_FAILED: 3 validation failures
-  AWAITING_PAYMENT --> PAYMENT_FAILED: 3rd failure during validation
+  SEATS_HELD --> PAYMENT_FAILED: 3 codes × 3 failures each
+  AWAITING_PAYMENT --> PAYMENT_FAILED: final failure during validation
   CREATED --> CANCELLED: POST /cancel
   SEATS_HELD --> CANCELLED: POST /cancel
   AWAITING_PAYMENT --> EXPIRED: timer expiry (after reject)
@@ -110,7 +110,7 @@ stateDiagram-v2
 | `CONFIRMED` | Yes | Payment succeeded; seats booked |
 | `EXPIRED` | Yes | Hold timer reached zero; seats released |
 | `CANCELLED` | Yes | User cancelled; seats released |
-| `PAYMENT_FAILED` | Yes | Three payment validation failures; seats released |
+| `PAYMENT_FAILED` | Yes | All three payment methods exhausted (3×3); seats released |
 
 ### 2.4 Seat states
 
@@ -138,8 +138,8 @@ Inventory is isolated per `flight_id`. Seat `1A` on flight `NA4821` is independe
 | Simulated failure rate | 15% (override via `PAYMENT_*` env vars in dev/test) |
 | Attempts per method | **3** failures per 5-digit code |
 | Methods per order | **3** different codes (`methods_used` / `methods_remaining` in API) |
-| New method | `POST .../payment/new-method` or auto-switch after a code is exhausted |
-| Code switch mid-method | Different code with zero failures → HTTP 400; after ≥1 failure on current code → allowed |
+| New method | `POST .../payment/new-method` required before submitting a **different** code while the current code is still active |
+| Code switch mid-method | Different code with an active current code → HTTP 400 `new_method_required`; after a code is exhausted (`attempts_exhausted`), enter the next code directly |
 | Terminal on exhaustion | After 3 codes × 3 failures each → `PAYMENT_FAILED`, seats released |
 
 ---
@@ -176,7 +176,7 @@ sequenceDiagram
   API-->>UI: 200 seat map (is_mine on held seats)
 
   UI->>API: POST /orders/{id}/payment { code: "12345" }
-  API->>TC: SignalWorkflow(SubmitPayment)
+  API->>TC: UpdateWorkflow(SubmitPayment)
   WF->>WF: AWAITING_PAYMENT
   WF->>WF: ValidatePayment → ConfirmSeats
   API-->>UI: 200 { status: CONFIRMED, payment_events }
@@ -206,14 +206,16 @@ sequenceDiagram
   participant API as REST API
   participant WF as BookingWorkflow
 
-  loop Up to 2 failures
+  Note over UI,WF: Fail code A three times → attempts_exhausted (order stays SEATS_HELD)
+
+  loop Three payment codes
     UI->>API: POST /orders/{id}/payment { code }
-    WF->>WF: ValidatePayment fails
-    API-->>UI: 200 { status: SEATS_HELD, payment_failures: N }
+    WF->>WF: ValidatePayment fails (up to 3× per code)
+    API-->>UI: 200 { status: SEATS_HELD, payment_events }
   end
 
   UI->>API: POST /orders/{id}/payment { code }
-  WF->>WF: 3rd failure → release seats → PAYMENT_FAILED
+  WF->>WF: 3rd code exhausted → release seats → PAYMENT_FAILED
   API-->>UI: 410 { error: "order is terminal" }
 ```
 
@@ -230,11 +232,12 @@ sequenceDiagram
 
   Note over WF: Hold timer expires
 
-  WF->>WF: RejectInFlightPayment
+  Note over WF: handleTimerExpiry rejects in-flight payment inline
+
   WF->>WF: Release seats → EXPIRED
   Note over WF: payment_events: rejected_by_timer
 
-  API-->>UI: 410 or 200 (depends on poll timing)
+  API-->>UI: 200 or 410 depending on request timing
 ```
 
 ### 3.5 Multi-flight isolation (S-5)
@@ -302,7 +305,9 @@ Returned by all order endpoints on success:
       "message": "payment validation failed"
     }
   ],
-  "payment_failures": 1
+  "payment_failures": 1,
+  "methods_used": 0,
+  "methods_remaining": 3
 }
 ```
 
@@ -314,7 +319,9 @@ Returned by all order endpoints on success:
 | `held_seat_ids` | string[] | Currently held seat IDs (e.g. `"1A"`) |
 | `timer_remaining_seconds` | int | Seconds until hold expiry; `0` when timer cleared |
 | `payment_events` | array | Append-only payment audit log (omitted when empty) |
-| `payment_failures` | int | Cumulative failed validation count |
+| `payment_failures` | int | Cumulative failed validation count across all methods |
+| `methods_used` | int | Payment codes/methods consumed (max 3) |
+| `methods_remaining` | int | Remaining method slots before terminal exhaustion |
 
 **Payment event types:**
 
@@ -323,7 +330,8 @@ Returned by all order endpoints on success:
 | `format_invalid` | Code failed format check or payment not allowed |
 | `validation_failed` | Simulated gateway rejected the code |
 | `validation_success` | Payment validated and seats confirmed |
-| `attempts_exhausted` | Third failure — order terminated |
+| `attempts_exhausted` | Third failure on current code — method slot consumed; order stays active until all methods fail |
+| `new_method_started` | User invoked `POST .../payment/new-method` before switching codes |
 | `rejected_by_timer` | In-flight payment rejected because hold timer expired |
 
 ---
@@ -454,7 +462,7 @@ Replace held seats on an order. Releases previous holds, applies new ones, reset
 
 **Behavior notes:**
 - First hold with non-empty `seat_ids` transitions `CREATED` → `SEATS_HELD`.
-- Cannot update seats while `AWAITING_PAYMENT` (returns `500` — workflow rejects with `payment_in_progress`).
+- Cannot update seats while `AWAITING_PAYMENT` (returns `409` — workflow rejects with `payment_in_progress`).
 - Hold limit: up to full plane capacity per order.
 
 **Errors:**
@@ -510,13 +518,14 @@ Typical outcomes:
 |---------|------|------------------|
 | Validation failed (attempts remain) | `200` | `SEATS_HELD` |
 | Validation succeeded | `200` | `CONFIRMED` |
-| Third failure (exhausted) | `410` | — (error body only; order is `PAYMENT_FAILED`) |
+| All methods exhausted (3×3) | `410` | — (error body; order is `PAYMENT_FAILED`) |
 
 **Behavior notes:**
 - Order must be in `SEATS_HELD` with at least one held seat.
-- Handler validates format before signaling workflow.
-- API polls workflow status for up to **12 seconds** waiting for payment activity to settle.
+- Handler validates format before calling the workflow update.
+- Payment runs synchronously via `UpdateWorkflow` (no server-side poll loop).
 - Timer continues decrementing during validation.
+- Different code while a current code is active requires prior `POST .../payment/new-method`.
 
 **Errors:**
 
@@ -525,9 +534,28 @@ Typical outcomes:
 | `400` | `"invalid request body"` | Missing `code` in JSON |
 | `400` | `"invalid payment code"` | Not exactly 5 digits |
 | `400` | `"payment not allowed"` | Order is `CREATED` (no seats), `CONFIRMED`, or wrong state |
+| `400` | `"new payment method required"` | Different code submitted without prior new-method |
 | `404` | `"order not found"` | Unknown workflow |
 | `410` | `"order is terminal"` | Order is `EXPIRED`, `CANCELLED`, or `PAYMENT_FAILED` |
-| `500` | `"internal error"` | Payment processing timeout or unmapped error |
+| `500` | `"internal error"` | Unmapped workflow/activity error |
+
+---
+
+#### `POST /api/v1/orders/{order_id}/payment/new-method`
+
+Switch to a new payment code before submitting a different 5-digit code while the current code is still active.
+
+**Request:** No body required.
+
+**Response `200`:** [Order response](#43-order-response) with `new_method_started` event.
+
+**Errors:**
+
+| Code | `error` | Cause |
+|------|---------|-------|
+| `400` | `"new payment method not needed"` | Called before any payment attempt on current code |
+| `400` | `"new payment method required"` | (validator) no switch needed |
+| `410` | `"order is terminal"` | Order already terminal |
 
 ---
 

@@ -299,6 +299,17 @@ func submitPayment(t *testing.T, srv *httptest.Server, orderID, code string) (or
 	return body, resp.StatusCode
 }
 
+func startNewPaymentMethod(t *testing.T, srv *httptest.Server, orderID string) (orderBody, int) {
+	t.Helper()
+	resp := postJSON(t, srv.URL+"/api/v1/orders/"+orderID+"/payment/new-method", map[string]any{})
+	defer resp.Body.Close()
+	var body orderBody
+	if resp.StatusCode == http.StatusOK {
+		body = decodeOrder(t, resp)
+	}
+	return body, resp.StatusCode
+}
+
 func getOrder(t *testing.T, srv *httptest.Server, orderID string) orderBody {
 	t.Helper()
 	resp, err := http.Get(srv.URL + "/api/v1/orders/" + orderID)
@@ -659,8 +670,8 @@ func TestI_D2_LatePaymentRejectedOnExpiry(t *testing.T) {
 	}
 }
 
-// I-D3: Retry flow — Fail 2× then 3rd attempt succeeds without new method.
-func TestI_D3_RetryWithoutNewMethodThenSuccess(t *testing.T) {
+// I-D3a: Fail same code twice then succeed on third attempt (no new-method).
+func TestI_D3a_RetrySameCodeThenSuccess(t *testing.T) {
 	t.Setenv("PAYMENT_FAIL_UNTIL", "2")
 	srv := newTestApp(t)
 
@@ -675,6 +686,39 @@ func TestI_D3_RetryWithoutNewMethodThenSuccess(t *testing.T) {
 	}
 
 	body, code := submitPayment(t, srv, order.OrderID, "11111")
+	if code != http.StatusOK || body.Status != "CONFIRMED" {
+		t.Fatalf("success payment status=%d body=%+v", code, body)
+	}
+}
+
+// I-D3: Fail once → new method → different code succeeds (matrix I-D3).
+func TestI_D3_NewMethodSwitchThenSuccess(t *testing.T) {
+	t.Setenv("PAYMENT_FAIL_UNTIL", "1")
+	srv := newTestApp(t)
+
+	order := createOrder(t, srv, memory.Flight1ID)
+	holdSeat(t, srv, order.OrderID)
+
+	body, code := submitPayment(t, srv, order.OrderID, "11111")
+	if code != http.StatusOK || body.Status != "SEATS_HELD" {
+		t.Fatalf("first payment status=%d body=%+v", code, body)
+	}
+
+	body, code = startNewPaymentMethod(t, srv, order.OrderID)
+	if code != http.StatusOK || body.Status != "SEATS_HELD" {
+		t.Fatalf("new-method status=%d body=%+v", code, body)
+	}
+	foundNewMethod := false
+	for _, ev := range body.PaymentEvents {
+		if ev.Type == "new_method_started" {
+			foundNewMethod = true
+		}
+	}
+	if !foundNewMethod {
+		t.Fatal("expected new_method_started event")
+	}
+
+	body, code = submitPayment(t, srv, order.OrderID, "22222")
 	if code != http.StatusOK || body.Status != "CONFIRMED" {
 		t.Fatalf("success payment status=%d body=%+v", code, body)
 	}

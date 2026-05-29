@@ -2,6 +2,8 @@ package memory_test
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 
 	"neon/domain"
@@ -238,5 +240,40 @@ func TestU_A7_SwapHoldRollbackOnConflict(t *testing.T) {
 		if seat.Status != domain.SeatStatusHeld || seat.OrderID != wantOrder {
 			t.Fatalf("seat %s = %+v, want HELD by %s", id, seat, wantOrder)
 		}
+	}
+}
+
+// U-A10: Concurrent TryHold on one seat never double-books.
+func TestU_A10_ConcurrentTryHoldSingleSeat(t *testing.T) {
+	_, seats := newTestRepos(t)
+	ctx := context.Background()
+
+	const (
+		flight = memory.Flight1ID
+		seat   = "1A"
+	)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 32; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			_ = seats.TryHold(ctx, flight, []string{seat}, fmt.Sprintf("O%d", id))
+		}(i)
+	}
+	wg.Wait()
+
+	got, err := seats.ListByFlight(ctx, flight)
+	if err != nil {
+		t.Fatalf("ListByFlight: %v", err)
+	}
+	holders := 0
+	for _, s := range got {
+		if s.SeatID == seat && s.Status == domain.SeatStatusHeld {
+			holders++
+		}
+	}
+	if holders != 1 {
+		t.Fatalf("held count = %d, want 1", holders)
 	}
 }

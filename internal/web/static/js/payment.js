@@ -97,6 +97,25 @@
     return last && last.type === "attempts_exhausted" && methodsRemaining(order) <= 0;
   }
 
+  function currentCodeAttempts(order) {
+    const events = order.payment_events || [];
+    let attempts = 0;
+    for (const ev of events) {
+      if (ev.type === "new_method_started") {
+        attempts = 0;
+        continue;
+      }
+      if (ev.type === "attempts_exhausted") {
+        attempts = 0;
+        continue;
+      }
+      if (ev.type === "validation_failed") {
+        attempts += 1;
+      }
+    }
+    return Math.min(attempts, MAX_ATTEMPTS_PER_METHOD);
+  }
+
   function updateFormControls(order) {
     const typedCode = paymentCode.value.trim();
     const validInput = /^\d{5}$/.test(typedCode);
@@ -106,14 +125,15 @@
       lastSubmittedCode &&
       typedCode &&
       typedCode !== lastSubmittedCode &&
-      !methodSwitchAllowed(order);
+      !methodSwitchAllowed(order) &&
+      !currentMethodExhausted(order);
 
     const canSubmit =
       order.status === "SEATS_HELD" &&
       validInput &&
       !exhausted &&
-      !methodExhausted &&
-      !needsNewMethod;
+      !needsNewMethod &&
+      (!methodExhausted || (typedCode && typedCode !== lastSubmittedCode));
 
     submitBtn.disabled = !canSubmit;
     paymentCode.disabled = order.status !== "SEATS_HELD" || exhausted;
@@ -122,12 +142,18 @@
       const canNewMethod =
         order.status === "SEATS_HELD" &&
         methodsRemaining(order) > 0 &&
-        ((order.payment_failures ?? 0) > 0 || needsNewMethod);
+        !methodExhausted &&
+        lastSubmittedCode &&
+        currentCodeAttempts(order) > 0 &&
+        typedCode === lastSubmittedCode;
       newMethodBtn.disabled = !canNewMethod;
     }
   }
 
   function methodSwitchAllowed(order) {
+    if (currentMethodExhausted(order)) {
+      return true;
+    }
     const events = order.payment_events || [];
     const last = events[events.length - 1];
     return last && last.type === "new_method_started";
@@ -145,13 +171,13 @@
 
   function renderOrder(order) {
     latestOrder = order;
-    const failures = order.payment_failures ?? 0;
+    const attemptsOnCode = currentCodeAttempts(order);
     const methodsUsed = order.methods_used ?? 0;
     const remaining = methodsRemaining(order);
 
     orderStatusEl.textContent = order.status;
     heldSeatsEl.textContent = `Held seats: ${(order.held_seat_ids || []).join(", ") || "—"}`;
-    attemptsUsedEl.textContent = `${Math.min(failures, MAX_ATTEMPTS_PER_METHOD)} / ${MAX_ATTEMPTS_PER_METHOD} on current code`;
+    attemptsUsedEl.textContent = `${attemptsOnCode} / ${MAX_ATTEMPTS_PER_METHOD} on current code`;
     if (methodsUsedEl) {
       methodsUsedEl.textContent = `${methodsUsed} / ${MAX_PAYMENT_METHODS} (remaining: ${remaining})`;
     }
@@ -184,6 +210,10 @@
       showError(errorEl, `Order is ${order.status}. Cannot accept payment.`);
       setFormDisabled(true);
       return;
+    }
+
+    if (currentMethodExhausted(order) && methodsRemaining(order) > 0) {
+      lastSubmittedCode = "";
     }
 
     paymentPanel.classList.remove("hidden");

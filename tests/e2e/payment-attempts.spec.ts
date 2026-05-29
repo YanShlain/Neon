@@ -131,29 +131,24 @@ test.describe("MVP-E failure journey (E-E3)", () => {
     }
   });
 
-  test("E-E3: method attempts exhaust and show failure state", async ({ page }) => {
+  test("E-E3: full 3x3 method exhaustion reaches PAYMENT_FAILED", async ({ page }) => {
     await page.goto(`${server.baseURL}/`);
     await startOrder(page, 0);
     await selectSeatAndProceed(page, "1B");
-    const codeInput = page.locator("#payment-code");
-    const submit = page.getByRole("button", { name: "Submit payment" });
 
-    for (let i = 0; i < 8; i++) {
-      const attempts = ((await page.locator("#attempts-used").textContent()) || "").trim();
-      if (attempts === "3 / 3") {
-        break;
+    const codes = ["11111", "22222", "33333"];
+    for (let i = 0; i < codes.length; i++) {
+      if (i > 0) {
+        await page.locator("#payment-code").fill(codes[i]);
+        await expect(page.getByRole("button", { name: "Submit payment" })).toBeEnabled();
       }
-      await codeInput.fill("11111");
-      if (await submit.isEnabled()) {
-        await submit.click();
-      } else {
-        await page.reload();
-      }
+      await exhaustPaymentCode(page, codes[i]);
     }
 
-    await expect(page.locator("#attempts-used")).toHaveText("3 / 3");
-    await expect(submit).toBeDisabled();
-    await expect(page.locator("#payment-feedback")).toContainText("Attempts exhausted for this code");
+    await expect(page.locator("#order-status")).toHaveText("PAYMENT_FAILED", { timeout: 15000 });
+    await expect(page.locator("#error")).toContainText(/All payment methods failed/i);
+    await expect(page.evaluate(() => localStorage.getItem("neon_order_id"))).resolves.toBeNull();
+    await expect(page.locator("#methods-used")).toContainText("3 / 3");
   });
 });
 
@@ -214,6 +209,24 @@ async function clickAnyAvailableSeat(page: Page): Promise<string> {
   const label = ((await seat.getAttribute("aria-label")) || "").trim();
   await seat.click();
   return label.split(" ")[0];
+}
+
+async function exhaustPaymentCode(page: Page, code: string): Promise<void> {
+  const codeInput = page.locator("#payment-code");
+  const submit = page.getByRole("button", { name: "Submit payment" });
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await codeInput.fill(code);
+    await expect(submit).toBeEnabled({ timeout: 10000 });
+    await submit.click();
+    if (attempt < 2) {
+      await expect(page.locator("#payment-feedback")).toContainText(/failed/i, { timeout: 10000 });
+    }
+  }
+
+  await expect(page.locator("#attempts-used")).toHaveText("0 / 3 on current code");
+  await expect(submit).toBeDisabled();
+  await expect(page.locator("#payment-feedback")).toContainText(/exhausted/i);
 }
 
 async function readTimerSeconds(page: Page, selector: string): Promise<number> {

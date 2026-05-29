@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -12,10 +13,15 @@ import (
 	"neon/internal/workflow/booking"
 )
 
-// ReconcileHolds rebuilds in-memory seat holds from running Temporal workflows.
-// Call on worker/API startup so a process restart does not leave inventory empty while
-// workflows still believe seats are held.
-func ReconcileHolds(ctx context.Context, c client.Client, seats domain.SeatRepository) error {
+// ReconcileInventory rebuilds in-memory seat holds from running Temporal workflows.
+// Call on worker/API startup so a process restart does not leave inventory empty
+// while workflows still believe seats are held.
+//
+// MVP limitation: BOOKED seats from CONFIRMED workflows are not replayed on restart
+// because the in-memory store has no durable write path. On restart, a CONFIRMED
+// order's seats return to AVAILABLE until the in-memory store is replaced with
+// persistent storage (e.g. Postgres with a unique constraint on (flight_id, seat_id)).
+func ReconcileInventory(ctx context.Context, c client.Client, seats domain.SeatRepository) error {
 	req := &workflowservice.ListWorkflowExecutionsRequest{
 		Namespace: booking.Namespace,
 		Query:     fmt.Sprintf("WorkflowType = %q AND ExecutionStatus = %q", booking.WorkflowName, "Running"),
@@ -25,7 +31,7 @@ func ReconcileHolds(ctx context.Context, c client.Client, seats domain.SeatRepos
 	for {
 		resp, err := c.ListWorkflow(ctx, req)
 		if err != nil {
-			return fmt.Errorf("list workflows: %w", err)
+			return fmt.Errorf("list running workflows: %w", err)
 		}
 
 		for _, exec := range resp.Executions {
@@ -45,13 +51,11 @@ func ReconcileHolds(ctx context.Context, c client.Client, seats domain.SeatRepos
 				continue
 			}
 			if err := seats.ApplyHold(ctx, status.FlightID, orderID, status.HeldSeatIDs); err != nil {
-				slog.Warn("reconcile hold apply failed",
-					"order_id", orderID,
-					"flight_id", status.FlightID,
-					"seat_ids", status.HeldSeatIDs,
-					"error", err,
-				)
-				continue
+				if errors.Is(err, domain.ErrHoldConflict) {
+					return fmt.Errorf("reconcile hold conflict order=%s flight=%s seats=%v: %w",
+						orderID, status.FlightID, status.HeldSeatIDs, err)
+				}
+				return fmt.Errorf("reconcile apply hold order=%s: %w", orderID, err)
 			}
 			applied++
 		}

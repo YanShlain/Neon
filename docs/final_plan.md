@@ -4,7 +4,7 @@
 > **Status:** LOCKED  
 > **Last updated:** 2026-05-24  
 > **Principles:** S.O.L.I.D, 3-Tier Layering, Temporal Orchestration, Layer Agnosticism (repository interfaces).  
-> **Requirements:** [final_requierments.md](final_requierments.md) · **Initial stub:** [initial_plan.md](initial_plan.md)
+> **Requirements:** [final_requierments.md](final_requierments.md) · **Initial requirements:** [initial_requirements.md](initial_requirements.md)
 
 ---
 
@@ -15,7 +15,7 @@
 | Aspect | Assessment |
 |--------|------------|
 | **Clarity** | Insufficient as standalone design — 42-line stub deferring to missing `plan.md`. |
-| **Correctness (intent)** | Aligned with locked requirements on timer behavior, signals, seat-map read path, binary split, UI hints. |
+| **Correctness (intent)** | Aligned with locked requirements on timer behavior, workflow updates, seat-map read path, binary split, UI hints. |
 | **Completeness** | Major gaps — filled by this document. |
 
 ### 0.2 What `initial_plan.md` got right (preserve in implementation)
@@ -23,7 +23,7 @@
 | # | Decision | Requirement alignment |
 |---|----------|----------------------|
 | 1 | `GET /api/v1/flights/{flight_id}/seats` reads `SeatRepository`, not Temporal | Read-heavy seat map avoids workflow round-trip; writes go through activities. |
-| 2 | Signals `UpdateSeats`, `SubmitPayment`, `CancelOrder`; query `GetStatus` | Single-workflow order lifecycle. |
+| 2 | Workflow updates `UpdateSeats`, `SubmitPayment`, `StartNewPaymentMethod`, `CancelOrder`; query `GetStatus` | Single-workflow order lifecycle. |
 | 3 | Cancellable 15m timer via selector loop; timer **never pauses** during payment | §2.1 and S-4. |
 | 4 | `cmd/api` + `cmd/worker` binaries | Clean Presentation vs worker boundary. |
 | 5 | UI: grayscale for others' HELD/BOOKED; highlight own holds via `?order_id=` | Multi-user seat map UX. |
@@ -43,15 +43,15 @@
 
 ## 2. Three-Tier Model (Go + Temporal)
 
-Temporal shifts **orchestration** into the Service tier. Presentation starts/signals/queries workflows; Activities perform side effects through repository interfaces.
+Temporal shifts **orchestration** into the Service tier. Presentation starts/updates/queries workflows; Activities perform side effects through repository interfaces.
 
 ### 2.1 Layer responsibilities
 
 | Layer | Technology | Owns | Must not |
 |-------|------------|------|----------|
-| **Presentation** | Go (Gin), Temporal Client | HTTP routes, DTOs, workflow start/signal/query, status codes, CORS | Business rules, direct seat mutation, SQL/Redis drivers, payment simulation |
+| **Presentation** | Go (Gin), Temporal Client | HTTP routes, DTOs, workflow start/update/query, status codes, CORS | Business rules, direct seat mutation, SQL/Redis drivers, payment simulation |
 | **Service** | Temporal Workflow + Activities | Order state machine, timer, payment retry/method rules, hold/release/book orchestration | HTTP types, Gin handlers |
-| **Data** | Repository adapters | Seat/flight inventory, transactional hold/release | HTTP, workflow signals, payment policy |
+| **Data** | Repository adapters | Seat/flight inventory, transactional hold/release | HTTP, workflow updates, payment policy |
 
 **Layer agnosticism:** Activities depend on repository **interfaces** only. In-memory adapters used for all MVPs; Postgres adapters swap in later without workflow changes.
 
@@ -70,6 +70,9 @@ type Seat struct {
 type SeatRepository interface {
     ListByFlight(ctx context.Context, flightID string) ([]Seat, error)
     TryHold(ctx context.Context, flightID string, seatIDs []string, orderID string) error
+    SwapHold(ctx context.Context, flightID, orderID string, releaseIDs, holdIDs []string) error
+    ApplyHold(ctx context.Context, flightID, orderID string, seatIDs []string) error
+    ApplyBooked(ctx context.Context, flightID, orderID string, seatIDs []string) error
     Release(ctx context.Context, flightID string, seatIDs []string, orderID string) error
     Confirm(ctx context.Context, flightID string, seatIDs []string, orderID string) error
 }
@@ -90,7 +93,7 @@ type FlightRepository interface {
 
 | Interface | Aggregate | Key methods |
 |-----------|-----------|-------------|
-| `SeatRepository` | Seat (per flight) | `ListByFlight`, `TryHold`, `Release`, `Confirm` |
+| `SeatRepository` | Seat (per flight) | `ListByFlight`, `TryHold`, `SwapHold`, `ApplyHold`, `ApplyBooked`, `Release`, `Confirm` |
 | `FlightRepository` | Flight | `Get`, `List` |
 
 ### 2.3 Layer dependency diagram
@@ -111,7 +114,7 @@ flowchart TB
     MEM[In-Memory Adapter]
   end
   R --> TC
-  TC -->|start signal query| WF
+  TC -->|start update query| WF
   WF --> ACT
   ACT --> SI
   ACT --> FI
@@ -137,7 +140,7 @@ sequenceDiagram
   API-->>UI: order_id + timer_remaining_seconds
 
   UI->>API: PATCH /orders/id/seats
-  API->>TC: Signal UpdateSeats
+  API->>TC: UpdateWorkflow(UpdateSeats)
   WF->>ACT: ReleaseOld + TryHoldNew
   ACT->>SR: Release / TryHold
   Note over WF: Reset 15m timer
@@ -147,10 +150,10 @@ sequenceDiagram
   API-->>UI: seat map
 
   UI->>API: POST /orders/id/payment/new-method
-  API->>TC: Signal StartNewPaymentMethod
+  API->>TC: UpdateWorkflow(StartNewPaymentMethod)
 
   UI->>API: POST /orders/id/payment
-  API->>TC: Signal SubmitPayment
+  API->>TC: UpdateWorkflow(SubmitPayment)
   WF->>ACT: ValidatePayment
   ACT-->>WF: success
   WF->>ACT: ConfirmSeats
@@ -186,10 +189,9 @@ loop until terminal:
 
 | Activity | Responsibility |
 |----------|----------------|
-| `HoldSeats` / `ReleaseSeats` | Mutate `SeatRepository` |
+| `SwapSeats` / `ReleaseSeats` | Mutate `SeatRepository` via `SwapHold` / `Release` |
 | `ConfirmSeats` | HELD → BOOKED |
-| `ValidatePayment` | 5-digit format, 10s timeout, 15% simulated failure |
-| `RejectInFlightPayment` | Simulated refund when timer wins race (S-4) |
+| `ValidatePayment` | 5-digit format, simulated gateway delay/failure |
 
 **Workflow ID:** `order_id` == Temporal workflow ID (1:1).
 
@@ -227,6 +229,7 @@ loop until terminal:
 | POST | `/api/v1/orders/{order_id}/payment` | Update `SubmitPayment` | `{ "code": "12345" }` — rejects if different code without prior new-method |
 | POST | `/api/v1/orders/{order_id}/cancel` | Update `CancelOrder` | → `CANCELLED` |
 | GET | `/api/v1/orders/{order_id}` | Query `GetStatus` | Status, timer, payment state, events |
+| GET | `/api/v1/orders/{order_id}/stream` | SSE status stream | Real-time UI; 2s polling fallback |
 
 **Error mapping:** 409 hold conflict; 400 invalid payment code / business rule; 404 unknown order/flight; 410 terminal order.
 
@@ -339,7 +342,7 @@ flowchart LR
 
 ### MVP-C — Payment happy path
 
-**Deliverables:** `ValidatePayment`, `ConfirmSeats`, `SubmitPayment` signal, `POST .../payment`, `payment_events` in query.
+**Deliverables:** `ValidatePayment`, `ConfirmSeats`, `SubmitPayment` workflow update, `POST .../payment`, `payment_events` in query.
 
 **UI deliverables:**
 - **Payment screen** — 5-digit code input with format validation.
@@ -351,7 +354,7 @@ flowchart LR
 
 ### MVP-D — Payment edge cases
 
-**Deliverables:** `StartNewPaymentMethod` signal + API, method/attempt tracking, `RejectInFlightPayment`, terminal failure on exhaustion.
+**Deliverables:** `StartNewPaymentMethod` update + API, method/attempt tracking, timer race handling (S-4), terminal failure on 3×3 exhaustion.
 
 **UI deliverables:**
 - **Try new payment method** — explicit button → `POST .../payment/new-method` before a different code.
@@ -364,7 +367,7 @@ flowchart LR
 
 ### MVP-E — E2E polish and full demo
 
-**Deliverables:** Responsive layout, accessibility pass, docker-compose stack for E2E, Playwright suite covering full journeys.
+**Deliverables:** Responsive layout, accessibility pass, Playwright suite (E-E1–E-E7) against local API+worker; `docker-compose.yml` provides Postgres only (optional future stack).
 
 **UI deliverables:**
 - **Cross-browser E2E** — E-E1–E-E7 (happy path, timer refresh, method exhaustion, late payment, multi-flight, multi-user map, single-order rule).
@@ -455,7 +458,7 @@ Tests use **Given / When / Then** tied to requirement scenarios. Build testabili
 |----|-------|------|------|
 | U-D1 | Method A failed 3× | New method → code B | Attempts reset; methods_used=2 |
 | U-D2 | 3 methods failed 3× each | Next attempt | Terminal failure |
-| U-D3 | 3 methods used | New method signal | Rejected |
+| U-D3 | 3 methods used | New method update on terminal order | Rejected |
 | U-D4 | Payment running; timer=0 | Timer branch | `EXPIRED`; payment rejected; seats free |
 | U-D5 | No new-method call | Submit different code | Rejected |
 
@@ -496,7 +499,7 @@ Tests use **Given / When / Then** tied to requirement scenarios. Build testabili
 |-------|---------|
 | Unit | Go `testing`; Temporal `testsuite.WorkflowTestSuite` |
 | Integration | `httptest` + in-process worker; time skipping |
-| E2E | Playwright (or similar) against docker-compose stack |
+| E2E | Playwright against local API + Temporal dev worker (`tests/e2e/`) |
 
 ```mermaid
 flowchart TB
@@ -562,4 +565,4 @@ flowchart LR
 
 ---
 
-*Requirements: [final_requierments.md](final_requierments.md) · Initial stub: [initial_plan.md](initial_plan.md)*
+*Requirements: [final_requierments.md](final_requierments.md) · Initial requirements: [initial_requirements.md](initial_requirements.md)*

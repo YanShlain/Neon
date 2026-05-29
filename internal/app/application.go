@@ -38,6 +38,10 @@ func BootstrapApp(ctx context.Context, opts Options) (*Application, error) {
 		return nil, err
 	}
 
+	if err := assertCoordinatedInMemoryDeploy(opts); err != nil {
+		return nil, err
+	}
+
 	if os.Getenv("TEMPORAL_AUTO_DEV") == "" {
 		os.Setenv("TEMPORAL_AUTO_DEV", "1")
 	}
@@ -54,8 +58,8 @@ func BootstrapApp(ctx context.Context, opts Options) (*Application, error) {
 	}
 
 	if opts.ReconcileHolds {
-		if err := ReconcileHolds(ctx, rt.Client, repos.Seats); err != nil {
-			slog.Warn("hold reconciliation failed", "error", err)
+		if err := ReconcileInventory(ctx, rt.Client, repos.Seats); err != nil {
+			return nil, fmt.Errorf("reconcile inventory: %w", err)
 		}
 	}
 
@@ -72,11 +76,21 @@ func BootstrapApp(ctx context.Context, opts Options) (*Application, error) {
 		}
 	}
 
-	if opts.StartWorker && os.Getenv("NEON_ROLE") == "api" && os.Getenv("TEMPORAL_AUTO_DEV") == "0" {
-		slog.Warn("split deployment with in-memory seats: run a single API+worker process or use durable storage")
-	}
-
 	return app, nil
+}
+
+func assertCoordinatedInMemoryDeploy(opts Options) error {
+	if os.Getenv("ALLOW_SPLIT_INMEMORY") == "1" {
+		return nil
+	}
+	role := os.Getenv("NEON_ROLE")
+	if role == "api" && !opts.StartWorker {
+		return fmt.Errorf(
+			"in-memory SeatRepository requires embedded worker in API process " +
+				"(set EMBED_TEMPORAL_WORKER=1 or ALLOW_SPLIT_INMEMORY=1 with shared durable storage)",
+		)
+	}
+	return nil
 }
 
 func (o Options) runWorkerInline() bool {

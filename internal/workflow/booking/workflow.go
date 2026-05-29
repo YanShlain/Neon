@@ -187,6 +187,10 @@ func BookingWorkflow(ctx workflow.Context, input WorkflowInput) error {
 					notifyTimerReset()
 					return state.toResponse(workflow.Now(ctx)), confirmErr
 				}
+				if state.Status.IsTerminal() {
+					notifyTimerReset()
+					return state.toResponse(workflow.Now(ctx)), nil
+				}
 				state.Status = domain.OrderStatusConfirmed
 				state.TimerDeadline = time.Time{}
 				state.appendPaymentEvent(PaymentEvent{
@@ -381,6 +385,7 @@ func applySeatUpdate(ctx workflow.Context, state *workflowState, seatIDs []strin
 	state.HeldSeatIDs = cloneStrings(seatIDs)
 	if len(seatIDs) == 0 {
 		state.Status = domain.OrderStatusCreated
+		state.TimerDeadline = workflow.Now(ctx).Add(state.HoldDuration)
 	} else {
 		state.Status = domain.OrderStatusSeatsHeld
 		state.TimerDeadline = workflow.Now(ctx).Add(state.HoldDuration)

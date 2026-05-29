@@ -50,14 +50,7 @@ The 2026-05-28 audit reported three failing integration tests and a missing 3×3
 
 ## Remaining Medium Findings (non-blocking)
 
-| ID | Area | Issue |
-|----|------|-------|
-| ARCH-2 | Docs | `final_plan.md` still uses “signal” terminology; code uses workflow updates |
-| ARCH-3 | Requirements | `PAYMENT_FAILED` terminal state not named in locked requirements §4 |
-| TEMP-2 | API contract | Implicit code switch after failures vs explicit `new-method` in plan |
-| QA-1 | Test matrix | U-D1–U-D3 workflow unit rows not implemented (integration covers S-3) |
-| UI-2 | E2E | Playwright E-E3 exercises one code only, not full 3×3 UI journey |
-| DATA-1 | Repository | `Release` not idempotent on retry |
+None — prior items resolved in grade-a-plus cycle 2 (2026-05-29). See [review_loop_state.md](review_loop_state.md) for open Low items.
 
 ---
 
@@ -81,6 +74,6 @@ The 2026-05-28 audit reported three failing integration tests and a missing 3×3
 | Multi-flight isolation (S-5) | ✅ |
 | Real-time updates (SSE + fallback) | ✅ |
 | Test suite | ✅ |
-| Documentation | ✅ (minor Medium drift in plan terminology) |
+| Documentation | ✅ |
 
-**The project is ready to deliver.** Medium findings above are recommended follow-ups, not submission blockers.
+**The project is ready to deliver.**

@@ -5,7 +5,7 @@ Automated coverage: unit **U-C1–U-C6**, integration **I-C1–I-C10** (`go test
 
 **Prerequisites**
 
-- Go 1.22+ on `PATH`
+- Go 1.24+ on `PATH`
 - Repo root: `c:\Users\YanSh\Dev\Neon` (adjust paths if different)
 - Free port **8080** (or set `API_ADDR`)
 
@@ -184,17 +184,17 @@ curl.exe -s -X POST "$base/orders/$orderId/payment" -H "Content-Type: applicatio
 
 **Expected:** First two responses **SEATS_HELD** with failure events; third **CONFIRMED** with ≥3 `payment_events`.
 
-### 3.10 Attempt exhaustion (negative, test hook)
+### 3.10 Per-method exhaustion (negative, test hook)
 
-Restart API with `$env:PAYMENT_ALWAYS_FAIL = "1"`, new order + hold, four payments:
+Restart API with `$env:PAYMENT_ALWAYS_FAIL = "1"`, new order + hold, three payments on the same code:
 
 ```powershell
-1..4 | ForEach-Object {
+1..3 | ForEach-Object {
   curl.exe -s -w "\nHTTP %{http_code}\n" -X POST "$base/orders/$orderId/payment" -H "Content-Type: application/json" -d '{\"code\":\"12345\"}'
 }
 ```
 
-**Expected:** Attempts 1–3 return HTTP **200** and **SEATS_HELD**; attempt 4 returns HTTP **400** `"payment attempts exhausted"`.
+**Expected:** All three return HTTP **200** and **SEATS_HELD** with `methods_used: 1`; order stays active (terminal only after 3 codes × 3 failures — see §6.3 / `TestI_D1`).
 
 ### 3.11 Quick smoke script (Invoke-RestMethod)
 
@@ -229,27 +229,24 @@ When all are checked, confirm **MVP-C** in chat so **MVP-D** can start.
 
 Set `$env:PAYMENT_ALWAYS_FAIL = "1"` for failure flows, or `$env:PAYMENT_FAIL_UNTIL = "2"` for partial failures.
 
-### 6.1 UI — New payment method (S-3 partial)
+### 6.1 UI — New payment method (switch codes mid-method)
 
-1. Hold seats by clicking seats on the map, then **Proceed to payment**.
-2. Open `/payment?flight_id=NA4821&order_id=<id>`.
-3. Submit a 5-digit code (e.g. `12345`) that fails (with `PAYMENT_ALWAYS_FAIL=1`) three times.
-4. **Expected:** Submit is disabled after 3 failures; counter shows `3 / 3`; feedback reads "Attempts exhausted…".
-5. Enter a **different** 5-digit code (e.g. `77777`) — Submit becomes enabled.
-6. Submit — the UI automatically calls new-method then payment; failures reset; event `new_method_started` appears.
+1. Hold seats, open payment page.
+2. Submit code `11111` once with `PAYMENT_ALWAYS_FAIL=1` (fails).
+3. Enter a **different** code `22222` without clicking **Try new payment method**.
+4. **Expected:** Inline error / feedback; Submit stays disabled until you click **Try new payment method**.
+5. Click **Try new payment method**, enter `22222`, submit — failures reset to `0 / 3 on current code`.
 
-### 6.2 UI — Different code without exhausted attempts (U-D5)
+### 6.2 UI — Different code rejected without new-method (U-D6)
 
-1. Submit a code (e.g. `12345`) once so it fails (`PAYMENT_ALWAYS_FAIL=1`).
-2. Enter a different 5-digit code (e.g. `54321`) and submit without exhausting all 3 attempts.
-3. **Expected:** Inline error `"start a new payment method before using a different code"` (or similar); event `method_change_required`; order stays `SEATS_HELD`; Submit remains functional.
+1. Submit code `11111` once so it fails (`PAYMENT_ALWAYS_FAIL=1`).
+2. Enter a different code `22222` and submit **without** clicking **Try new payment method**.
+3. **Expected:** Error feedback; order stays `SEATS_HELD`; same code can still be retried.
 
-### 6.3 UI — Method exhaustion (S-3)
+### 6.3 UI — Method exhaustion (S-3 / E-E3)
 
-1. With `PAYMENT_ALWAYS_FAIL=1`, fail code `11111` three times, then enter `22222` and submit (auto new-method).
-2. Fail `22222` three times, enter `33333` and submit (auto new-method).
-3. Fail `33333` three times, then enter any other code — Submit should be disabled (methods exhausted).
-4. **Expected:** Status `PAYMENT_FAILED`; seats released on seat map; `localStorage` order cleared.
+1. With `PAYMENT_ALWAYS_FAIL=1`, fail `11111` three times, then enter `22222` and fail three times, then `33333` three times.
+2. **Expected:** Status `PAYMENT_FAILED`; error *"All payment methods failed…"*; seats released; `localStorage` order cleared.
 
 ### 6.4 UI — Timer during payment (I-D4)
 
@@ -269,8 +266,8 @@ Invoke-RestMethod -Method POST -Uri "$base/orders/$($o.order_id)/payment/new-met
 
 ### 6.6 MVP-D sign-off checklist
 
-- [ ] Code-change gating after 3 failures; auto new-method on submit (§6.1)
-- [ ] Different-code rejection before exhaustion (§6.2)
+- [ ] Explicit new-method before code switch (§6.1)
+- [ ] Different-code rejection without new-method (§6.2)
 - [ ] UI method exhaustion (§6.3)
 - [ ] Timer visible during payment (§6.4)
 - [ ] `go test ./...` green (U-D1–U-D5, I-D1–I-D10)

@@ -8,7 +8,7 @@ A multi-flight seat reservation and payment system orchestrated by [Temporal](ht
 
 ## Project overview
 
-Neon lets anonymous users book seats on one or more flights. Each flight has its own seat inventory — seat `1A` on Flight 101 is independent from `1A` on Flight 102.
+Neon lets anonymous users book seats on one or more flights. Each flight has its own seat inventory — seat `1A` on flight `NA4821` is independent from `1A` on flight `NA1954`.
 
 ### Booking flow
 
@@ -82,7 +82,7 @@ flowchart TB
 
 - **Single workflow per order** — one `BookingWorkflow` owns the full lifecycle (timer, holds, payment, expiry). Workflow ID equals `order_id`.
 - **Read/write split for seats** — `GET /api/v1/flights/{flight_id}/seats` reads the seat repository directly; all seat mutations go through Temporal activities.
-- **Atomic seat updates** — `SwapHold` activity replaces separate release+hold; rollback-safe on conflict.
+- **Atomic seat updates** — `SwapSeats` activity uses repository `SwapHold`; rollback-safe on conflict.
 - **Workflow updates for payment** — `UpdateSubmitPayment` and `UpdateStartNewPaymentMethod` run synchronously (no signal polling).
 - **Hold reconciliation** — on startup, running workflows re-apply seat holds into memory after process restart.
 - **Two binaries** — `cmd/api` (HTTP + embedded worker by default) and `cmd/worker` (standalone). **In-memory inventory requires a single shared process** unless you add durable storage.
@@ -104,7 +104,7 @@ flowchart TB
 
 The static web UI is served from the API at `/` (flight list → seat map → payment → confirmation).
 
-For sequence diagrams, signal internals, and phased MVP delivery, see [docs/final_plan.md](docs/final_plan.md).
+For sequence diagrams, workflow update internals, and phased MVP delivery, see [docs/final_plan.md](docs/final_plan.md).
 
 ---
 
@@ -136,6 +136,8 @@ The API seeds flight inventory, starts an embedded Temporal dev server (`TEMPORA
 | `TEMPORAL_HOST` | `127.0.0.1:7233` | External Temporal address (used when auto-dev is off) |
 | `HOLD_DURATION` | `15m` | Hold timer length (`30s` or `2m` useful for manual testing) |
 | `API_ADDR` | `:8080` | HTTP listen address |
+| `EMBED_TEMPORAL_WORKER` | `1` | When `0`, API does not run the worker (requires separate `cmd/worker` **and** `ALLOW_SPLIT_INMEMORY=1` with shared storage) |
+| `ALLOW_SPLIT_INMEMORY` | — | Set to `1` to override split-deploy guard (not safe with in-memory seats) |
 
 Optional test hooks for payment simulation:
 
@@ -144,6 +146,7 @@ Optional test hooks for payment simulation:
 | `PAYMENT_NEVER_FAIL` | Always succeed payment validation |
 | `PAYMENT_ALWAYS_FAIL` | Always fail payment validation |
 | `PAYMENT_FAIL_UNTIL` | Fail the first N RNG calls, then succeed |
+| `PAYMENT_VALIDATION_DELAY` | Artificial delay in payment activity (e.g. `2s`, `5s`) |
 
 Example — shorter timer for manual testing:
 
@@ -190,10 +193,10 @@ In typical local development, `go run ./cmd/api` is sufficient.
 cmd/
   api/          HTTP server + embedded UI
   worker/       Temporal worker (optional split)
+domain/         Core types and repository interfaces
 internal/
   api/          Gin routes, handlers, DTOs
-  app/          Bootstrap and wiring
-  domain/       Core types and repository interfaces
+  app/          Bootstrap, hold reconciliation
   infrastructure/
     memory/     In-memory flight/seat repositories
     temporal/   Temporal client, dev server, order service

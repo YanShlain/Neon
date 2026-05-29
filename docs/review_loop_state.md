@@ -7,9 +7,9 @@
 | Field | Value |
 |-------|-------|
 | **Last cycle** | 2026-05-29 grade-a-plus (cycle 1) |
-| **Last reviewed commit** | (uncommitted — working tree) |
-| **Verdict** | IN PROGRESS — grade-a-plus |
-| **Loop mode** | grade-a-plus (self-paced `/loop` armed) |
+| **Last reviewed commit** | 579381d |
+| **Verdict** | IN PROGRESS — grade-a-plus (loop stopped by user) |
+| **Loop mode** | stopped |
 
 ## Test baseline
 

@@ -5,6 +5,7 @@
 ## When to run
 
 - User invoked `/review-loop fix`
+- User invoked `/grade-a-plus` enhance phase (fix Critical, High, **and Medium** that block A+)
 - Or Critical/High findings remain after triage and user did not say "review only"
 
 ## Rules

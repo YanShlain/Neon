@@ -3,8 +3,9 @@ name: review-loop
 description: >-
   Multi-expert review loop for Neon: architect, Go, Temporal, database, UI, QA,
   and docs experts verify requirements, tests, and documentation. Runs fix-verify
-  cycles until gates pass. Use with /review-loop, /deliver-ready, /loop, or when
-  the user asks for expert review, quality gate, delivery-ready loop, or review loop.
+  cycles until gates pass. Use with /review-loop, /deliver-ready, /grade-a-plus,
+  /loop, or when the user asks for expert review, quality gate, delivery-ready
+  loop, A+ grades, or review loop.
 ---
 
 # Neon Review Loop
@@ -25,6 +26,8 @@ Orchestrates sequential expert reviews, triage, optional fixes, and re-verificat
 
 | Command | Behavior |
 |---------|----------|
+| `/grade-a-plus` | **Grade loop (one cycle):** baseline gates → 7 subagent grades → enhance below A+ → partial re-review |
+| `/loop /grade-a-plus` | Repeat until all seven expert grades are **A+** or user stops |
 | `/deliver-ready` | **Delivery loop (one cycle):** reconcile `final_review.md` → fix Critical/High → dedicated subagent review → verify |
 | `/loop /deliver-ready` | Repeat `/deliver-ready` until READY or user stops |
 | `/review-loop` | Full cycle once (review → triage → fix if asked → verify) |
@@ -205,9 +208,102 @@ Parent agent: wait for all seven, dedupe in step D, update **Expert summary** ta
 
 Same as steps **10–11** above. On **READY**, set state `Verdict: READY`, update `final_review.md`, stop. On **NOT READY** with Critical/High, if `/loop /deliver-ready` is active: fix → verify → re-arm next wake (see `/loop` skill; PowerShell `Start-Sleep` on Windows).
 
+## Grade A+ loop
+
+Use **`/grade-a-plus`** (or **`/loop /grade-a-plus`**) when delivery gates already pass (or after `/deliver-ready`) but expert grades must all reach **A+**. This mode **enhances Medium+ gaps**, not only Critical/High.
+
+Command file: [`.cursor/commands/grade-a-plus.md`](../../commands/grade-a-plus.md)  
+Grading rubric: [roles/grading-rubric.md](roles/grading-rubric.md)
+
+### Grade A+ checklist
+
+```
+Grade A+ progress:
+- [ ] 0. Baseline (deliver-ready gates pass)
+- [ ] 1. Expert review via 7 dedicated subagents (grades A+..F)
+- [ ] 2. Triage — roles below A+ → blocking findings
+- [ ] 3. Enhance (Critical → High → Medium per role)
+- [ ] 4. Partial re-review (roles below A+; full review every 3 cycles)
+- [ ] 5. Verify (tests + grade table)
+- [ ] 6. Loop decision (all A+ / continue)
+```
+
+### 0. Baseline
+
+1. Read `docs/review_loop_state.md` — if `Verdict` is NOT READY or Critical/High open, run **Deliver-ready** steps A–B first.
+2. `go test ./... -count=1 -timeout 120s` — must pass before grading.
+3. Set state `Loop mode: grade-a-plus`.
+
+### 1. Dedicated subagent review (mandatory)
+
+Same dispatch as **Deliver-ready step C**, with these additions:
+
+- Each subagent **must** read [roles/grading-rubric.md](roles/grading-rubric.md).
+- Return grade **A+ / A / B / C / D / F** (not just READY/NOT READY).
+- List every finding that blocks **A+** for that role (include Medium).
+
+**Subagent prompt addition** (append to deliver-ready template):
+
+```
+5. Read .cursor/skills/review-loop/roles/grading-rubric.md
+6. Assign grade A+ / A / B / C / D / F using the rubric
+7. List findings blocking A+ (Medium or higher block A+)
+```
+
+Use `description` param prefix `Grade A+ review: <role>`.
+
+### 2. Triage
+
+1. Update **Expert summary** in state with grades and top issue per role.
+2. For each role with grade **below A+**, queue blocking findings (see rubric severity table).
+3. Sort enhance queue: **lowest grade first** (F→D→C→B→A), then Critical→High→Medium.
+
+### 3. Enhance phase (mandatory when any grade < A+)
+
+1. Follow [roles/developer-fix.md](roles/developer-fix.md) + `/developer`.
+2. Fix findings that block A+ for the **current role** before moving to the next role.
+3. One finding → minimal enhancement → `go test ./...` → **commit** → update state.
+4. Medium findings **must** be addressed in this loop (unlike deliver-ready).
+5. Do not scope-creep beyond what the finding requires for A+.
+
+### 4. Partial re-review
+
+After enhance phase:
+
+- Re-launch read-only subagents **only for roles that were below A+** at start of cycle.
+- Run **full seven-way review** every 3 cycles or if any role was C/D/F.
+
+### 5–6. Verify and loop decision
+
+1. `go test ./... -count=1 -timeout 120s`
+2. Refresh grades in state; move resolved findings to **Resolved** with commit evidence.
+3. Set `last_reviewed_commit` to HEAD.
+
+| Condition | Next action |
+|-----------|-------------|
+| All seven grades = **A+** | Stop; set `Verdict: A+ READY`; report grade table |
+| Any grade < A+ + `/loop /grade-a-plus` active | Enhance → partial re-review → re-arm wake |
+| Tests fail | Fix before re-grade; do not accept A+ with red tests |
+| User says stop | Report current grades and open blockers |
+
+### Grade A+ reporting
+
+End each cycle with:
+
+```markdown
+## Grade A+ summary — [date]
+
+**Verdict:** A+ READY | IN PROGRESS
+**Tests:** pass/fail
+**Grades:** Architect A+ | Go B | … (all seven)
+**Below A+:** role → grade → top blocker
+**Enhanced this cycle:** list commits/findings
+**Next:** role/fix list or "none — all A+"
+```
+
 ## Parallel expert mode (optional for `/review-loop` only)
 
-For `/review-loop` on large changes, you may launch read-only explore agents in parallel. **`/deliver-ready` always uses dedicated subagents (step C).** Sequential inline review remains the default for plain `/review-loop`.
+For `/review-loop` on large changes, you may launch read-only explore agents in parallel. **`/deliver-ready` and `/grade-a-plus` always use dedicated subagents.** Sequential inline review remains the default for plain `/review-loop`.
 
 ## Reporting
 
@@ -228,4 +324,6 @@ End each cycle with:
 
 - `/developer` — implement fixes with layer rules and test gates
 - `/senior-system-architect` — architecture changes only; not for routine review
+- `/deliver-ready` — fix documented gaps until delivery gates pass
+- `/grade-a-plus` — enhance until all seven expert grades are A+
 - `/loop` — scheduling; see loop skill for Windows PowerShell sentinel pattern

@@ -6,6 +6,8 @@ This project uses **Cursor Agent Skills** for implementation and quality gates.
 
 | Invoke | Purpose |
 |--------|---------|
+| `/grade-a-plus` | Enhance until all 7 expert grades are A+; one cycle |
+| `/loop /grade-a-plus` | Repeat until every expert grade is A+ |
 | `/deliver-ready` | Fix issues from `docs/final_review.md`, then 7 subagent experts; one delivery cycle |
 | `/loop /deliver-ready` | Repeat until READY (self-paced) |
 | `/review-loop` | Full multi-expert review cycle |
@@ -45,13 +47,16 @@ Review loop exits **READY** when:
 - S-1..S-5 each have passing automated tests
 - README matches implementation
 
+**Grade A+ loop** exits when all seven experts in [docs/review_loop_state.md](docs/review_loop_state.md) score **A+** (see [grading rubric](.cursor/skills/review-loop/roles/grading-rubric.md)).
+
 ## Typical workflow
 
 ```
 1. Implement feature     → /developer
 2. Delivery loop         → /loop /deliver-ready   (fix final_review gaps → subagent review → repeat)
-3. Or manual review      → /review-loop → /review-loop fix → /review-loop verify
-4. (Optional) CI watch   → /loop 15m /review-loop verify
+3. Excellence loop       → /loop /grade-a-plus    (enhance until all expert grades A+)
+4. Or manual review      → /review-loop → /review-loop fix → /review-loop verify
+5. (Optional) CI watch   → /loop 15m /review-loop verify
 ```
 
 ## Cursor Automations (on commit / push)

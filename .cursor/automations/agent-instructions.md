@@ -47,6 +47,20 @@ Or self-paced until gates pass:
 
 Same repo context as above; reads `docs/final_review.md` first, fixes Critical/High, then runs seven dedicated read-only expert subagents. See `.cursor/skills/review-loop/SKILL.md` **Deliver-ready loop**.
 
+## Optional: grade A+ loop (enhance until all experts A+)
+
+```
+/grade-a-plus
+```
+
+Or self-paced:
+
+```
+/loop /grade-a-plus
+```
+
+Runs after delivery gates pass. Fixes **Medium+** findings blocking A+ per role. Grading rubric: `.cursor/skills/review-loop/roles/grading-rubric.md`. See **Grade A+ loop** in review-loop SKILL.md.
+
 ## Optional: review-only (no auto-fix)
 
 Use this variant if you only want a report after each push:

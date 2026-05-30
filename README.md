@@ -2,7 +2,7 @@
 
 A multi-flight seat reservation and payment system orchestrated by [Temporal](https://temporal.io/). Users browse flights, hold seats on a 15-minute refreshable timer, and complete booking with a simulated 5-digit payment code.
 
-**Requirements:** [docs/final_requierments.md](docs/initial_requierments.md) · **Architecture:** [docs/design_overview.md](docs/final_plan.md)
+**Requirements:** [docs/final_requierments.md](docs/final_requierments.md) · **Architecture:** [docs/design_overview.md](docs/design_overview.md)
 
 ---
 
@@ -87,6 +87,8 @@ flowchart TB
 - **Two binaries** — `cmd/api` (HTTP + embedded worker by default) and `cmd/worker` (standalone). **In-memory inventory requires a single shared process** unless you add durable storage.
 - **MVP storage** — in-memory repositories seeded at startup. Postgres adapter planned via `SeatRepository` interface.
 
+Full rationale, alternatives, and assumptions: [design_overview.md §2.7](docs/design_overview.md#27-design-decisions-and-assumptions). Sequence diagrams for S-1..S-5 and platform flows: [design_overview.md §3](docs/design_overview.md#3-major-flows).
+
 ### API surface
 
 | Method | Path | Purpose |
@@ -98,11 +100,11 @@ flowchart TB
 | POST | `/api/v1/orders/{order_id}/payment` | Submit 5-digit payment code |
 | POST | `/api/v1/orders/{order_id}/cancel` | Cancel order |
 | GET | `/api/v1/orders/{order_id}` | Order status, timer, payment events |
-| GET | `/api/v1/orders/{order_id}/stream` | SSE order status (1s interval; UI falls back to 2s polling) |
+| GET | `/api/v1/orders/{order_id}/stream` | SSE order status (3s server poll; payment page uses SSE with 2s poll fallback) |
 
 The static web UI is served from the API at `/` (flight list → seat map → payment → confirmation).
 
-For sequence diagrams, workflow update internals, and phased MVP delivery, see [docs/final_plan.md](docs/final_plan.md).
+For sequence diagrams, workflow update internals, and the full API reference, see [docs/design_overview.md](docs/design_overview.md).
 
 ---
 
@@ -199,7 +201,7 @@ go test ./... -count=1 -timeout 120s
 
 ### End-to-end tests (Playwright)
 
-Browser tests live in [`tests/e2e/`](tests/e2e/). Each test starts its own `go run ./cmd/api` with embedded Temporal and drives the static UI. Traceability to [docs/initial_requirements.md](docs/initial_requirements.md) is in [docs/qa_review.md](docs/qa_review.md).
+Browser tests live in [`tests/e2e/`](tests/e2e/). Each test starts its own `go run ./cmd/api` with embedded Temporal and drives the static UI. Traceability to [docs/initial_requirements.md](docs/initial_requirements.md) and scenarios S-1..S-5 is in [docs/review_loop_state.md](docs/review_loop_state.md).
 
 **Prerequisites:** Node.js (for npm), Go 1.24+ on `PATH`.
 
@@ -272,7 +274,10 @@ internal/
   web/          Static HTML/JS/CSS (embedded)
 docs/
   final_requierments.md   Locked functional requirements
-  final_plan.md           Architecture and MVP phases
+  design_overview.md      Architecture, API, flows, design decisions
+  review_loop_state.md    Scenario coverage and E2E traceability
+  manual_tests.md         Step-by-step manual test scripts
+  initial_requirements.md Original exercise brief (Temporal architecture)
 ```
 
 ---
@@ -282,7 +287,7 @@ docs/
 | Document | Description |
 |----------|-------------|
 | [docs/final_requierments.md](docs/final_requierments.md) | Functional requirements, state machine, scenarios |
-| [docs/final_plan.md](docs/final_plan.md) | Three-tier architecture, API contract, MVP phases, test matrix |
+| [docs/design_overview.md](docs/design_overview.md) | Architecture, API reference, flows, design decisions |
+| [docs/review_loop_state.md](docs/review_loop_state.md) | S-1..S-5 coverage, E2E traceability, review state |
 | [docs/manual_tests.md](docs/manual_tests.md) | Step-by-step manual test scripts |
-| [docs/qa_review.md](docs/qa_review.md) | E2E traceability vs initial requirements, mismatches |
-| [docs/design_overview.md](docs/design_overview.md) | Detailed design reference and component map |
+| [docs/initial_requirements.md](docs/initial_requirements.md) | Original exercise brief (Temporal architecture) |

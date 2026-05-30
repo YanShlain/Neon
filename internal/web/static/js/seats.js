@@ -351,13 +351,105 @@ function splitColsAtAisle(cols) {
   };
 }
 
-function appendSeatOrPlaceholder(grid, seatByKey, row, col, selectedSeats, onToggle, syncing) {
+function appendSeatOrPlaceholder(parent, seatByKey, row, col, selectedSeats, onToggle, syncing) {
   const seat = seatByKey.get(`${row}${col}`);
   if (seat) {
-    grid.appendChild(seatCell(seat, selectedSeats, onToggle, syncing));
+    parent.appendChild(seatCell(seat, selectedSeats, onToggle, syncing));
   } else {
-    grid.appendChild(cell("corner", ""));
+    parent.appendChild(cell("corner", ""));
   }
+}
+
+function buildColLabelRow(leftCount, rightCount, hasAisle, withLavatory) {
+  const row = document.createElement("div");
+  row.className = "cabin-row cabin-row--col-labels";
+  row.appendChild(cell("corner", ""));
+  for (let i = 1; i <= leftCount; i += 1) {
+    row.appendChild(cell("col-label", String(i)));
+  }
+  if (hasAisle) {
+    row.appendChild(cell("seat-aisle", ""));
+  }
+  for (let i = 1; i <= rightCount; i += 1) {
+    row.appendChild(cell("col-label", String(i)));
+  }
+  if (withLavatory) {
+    const lav = cell("cabin-lavatory", "");
+    lav.setAttribute("aria-hidden", "true");
+    row.appendChild(lav);
+  }
+  return row;
+}
+
+function buildSeatRow(row, leftCols, rightCols, hasAisle, seatByKey, selectedSeats, onToggle, syncing, withLavatory) {
+  const rowEl = document.createElement("div");
+  rowEl.className = "cabin-row";
+  rowEl.appendChild(cell("row-label", String(row)));
+  leftCols.forEach((col) => {
+    appendSeatOrPlaceholder(rowEl, seatByKey, row, col, selectedSeats, onToggle, syncing);
+  });
+  if (hasAisle) {
+    rowEl.appendChild(cell("seat-aisle", ""));
+  }
+  rightCols.forEach((col) => {
+    appendSeatOrPlaceholder(rowEl, seatByKey, row, col, selectedSeats, onToggle, syncing);
+  });
+  if (withLavatory) {
+    const lav = cell("cabin-lavatory", "");
+    lav.setAttribute("aria-hidden", "true");
+    rowEl.appendChild(lav);
+  }
+  return rowEl;
+}
+
+function buildAisleArrows() {
+  const wrap = document.createElement("div");
+  wrap.className = "aisle-arrows";
+  wrap.setAttribute("aria-hidden", "true");
+  const up = document.createElement("span");
+  up.className = "aisle-arrow aisle-arrow--up";
+  const down = document.createElement("span");
+  down.className = "aisle-arrow aisle-arrow--down";
+  wrap.appendChild(up);
+  wrap.appendChild(down);
+  return wrap;
+}
+
+function buildHorizontalAisle(leftCount, rightCount, hasAisle, withLavatory) {
+  const aisle = document.createElement("div");
+  aisle.className = "cabin-row aisle-horizontal";
+  aisle.appendChild(cell("corner", ""));
+  for (let i = 0; i < leftCount; i += 1) {
+    aisle.appendChild(cell("aisle-spacer", ""));
+  }
+  if (hasAisle) {
+    const cross = cell("seat-aisle aisle-cross", "");
+    cross.appendChild(buildAisleArrows());
+    aisle.appendChild(cross);
+  }
+  for (let i = 0; i < rightCount; i += 1) {
+    aisle.appendChild(cell("aisle-spacer", ""));
+  }
+  if (withLavatory) {
+    const lav = cell("cabin-lavatory", "");
+    lav.setAttribute("aria-hidden", "true");
+    aisle.appendChild(lav);
+  }
+  return aisle;
+}
+
+function cabinGridTracks(leftCols, rightCols, hasAisle) {
+  const rowLabelW = "1.75rem";
+  const seatW = "2.25rem";
+  const aisleW = "1.75rem";
+  const lavatoryW = "1.5rem";
+  return [
+    rowLabelW,
+    ...leftCols.map(() => seatW),
+    ...(hasAisle ? [aisleW] : []),
+    ...rightCols.map(() => seatW),
+    lavatoryW,
+  ].join(" ");
 }
 
 function parseSeatID(seatID) {
@@ -380,40 +472,49 @@ function renderSeatGrid(container, seats, selectedSeats, onToggle, syncing) {
   const cols = [...new Set(parsed.map((s) => s.pos.col))].sort();
   const seatByKey = new Map(parsed.map((s) => [`${s.pos.row}${s.pos.col}`, s]));
   const { leftCols, rightCols, hasAisle } = splitColsAtAisle(cols);
-
-  const rowLabelW = "1.75rem";
-  const seatW = "2rem";
-  const aisleW = "1.25rem";
-  const colTracks = [
-    rowLabelW,
-    ...leftCols.map(() => seatW),
-    ...(hasAisle ? [aisleW] : []),
-    ...rightCols.map(() => seatW),
-  ];
+  const topRows = rows.filter((r) => r <= 5);
+  const bottomRows = rows.filter((r) => r > 5);
+  const withLavatory = true;
+  const gridTracks = cabinGridTracks(leftCols, rightCols, hasAisle);
 
   container.className = "seat-grid";
-  container.style.gridTemplateColumns = colTracks.join(" ");
   container.replaceChildren();
 
-  container.appendChild(cell("corner", ""));
-  leftCols.forEach((col) => container.appendChild(cell("col-label", col)));
-  if (hasAisle) {
-    container.appendChild(cell("seat-aisle", ""));
-  }
-  rightCols.forEach((col) => container.appendChild(cell("col-label", col)));
+  const cabin = document.createElement("div");
+  cabin.className = "seat-map-cabin";
+  cabin.style.setProperty("--cabin-cols", gridTracks);
 
-  rows.forEach((row) => {
-    container.appendChild(cell("row-label", String(row)));
-    leftCols.forEach((col) => {
-      appendSeatOrPlaceholder(container, seatByKey, row, col, selectedSeats, onToggle, syncing);
-    });
-    if (hasAisle) {
-      container.appendChild(cell("seat-aisle", ""));
-    }
-    rightCols.forEach((col) => {
-      appendSeatOrPlaceholder(container, seatByKey, row, col, selectedSeats, onToggle, syncing);
-    });
+  cabin.appendChild(cell("cabin-front", ""));
+
+  const topSection = document.createElement("div");
+  topSection.className = "seat-map-section seat-map-section--top";
+  topSection.appendChild(buildColLabelRow(leftCols.length, rightCols.length, hasAisle, withLavatory));
+  topRows.forEach((row) => {
+    topSection.appendChild(
+      buildSeatRow(row, leftCols, rightCols, hasAisle, seatByKey, selectedSeats, onToggle, syncing, withLavatory)
+    );
   });
+  cabin.appendChild(topSection);
+
+  if (topRows.length > 0 && bottomRows.length > 0) {
+    cabin.appendChild(buildHorizontalAisle(leftCols.length, rightCols.length, hasAisle, withLavatory));
+  }
+
+  if (bottomRows.length > 0) {
+    const bottomSection = document.createElement("div");
+    bottomSection.className = "seat-map-section seat-map-section--bottom";
+    bottomRows.forEach((row) => {
+      bottomSection.appendChild(
+        buildSeatRow(row, leftCols, rightCols, hasAisle, seatByKey, selectedSeats, onToggle, syncing, withLavatory)
+      );
+    });
+    bottomSection.appendChild(buildColLabelRow(leftCols.length, rightCols.length, hasAisle, withLavatory));
+    cabin.appendChild(bottomSection);
+  }
+
+  cabin.appendChild(cell("cabin-rear", ""));
+
+  container.appendChild(cabin);
 }
 
 function cell(className, text) {
@@ -450,6 +551,5 @@ function seatCell(seat, selectedSeats, onToggle, syncing) {
 
   el.title = `${seat.seat_id} — ${isSelected ? "selected" : seat.status}`;
   el.setAttribute("aria-label", `${seat.seat_id} ${seat.status}`);
-  el.textContent = seat.seat_id.replace(/^\d+/, "");
   return el;
 }

@@ -11,24 +11,28 @@ export type NeonServer = {
   stop: () => Promise<void>;
 };
 
+function buildServerEnv(opts: StartServerOptions): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  env.API_ADDR = `:${opts.port}`;
+  env.TEMPORAL_AUTO_DEV = "1";
+  for (const [key, value] of Object.entries(opts.env ?? {})) {
+    env[key] = value;
+  }
+  if (!env.HOLD_DURATION) {
+    env.HOLD_DURATION = "2m";
+  }
+  return env;
+}
+
 export async function startNeonServer(opts: StartServerOptions): Promise<NeonServer> {
   const baseURL = `http://127.0.0.1:${opts.port}`;
-  const child = spawn(
-    "go",
-    ["run", "./cmd/api"],
-    {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        API_ADDR: `:${opts.port}`,
-        TEMPORAL_AUTO_DEV: "1",
-        HOLD_DURATION: "2m",
-        ...opts.env,
-      },
-      stdio: "pipe",
-      shell: process.platform === "win32",
-    },
-  );
+  const goCmd = process.platform === "win32" ? "go.exe" : "go";
+  const child = spawn(goCmd, ["run", "./cmd/api"], {
+    cwd: process.cwd(),
+    env: buildServerEnv(opts),
+    stdio: "pipe",
+    shell: false,
+  });
 
   await waitForServerReady(baseURL, child);
 
@@ -47,11 +51,16 @@ async function waitForServerReady(baseURL: string, child: ChildProcess): Promise
 
   while (Date.now() < deadline) {
     if (child.exitCode !== null) {
+      lastError = `process exited with code ${child.exitCode}`;
       break;
     }
     try {
       const response = await client.get(`${baseURL}/api/v1/flights`);
       if (response.ok()) {
+        if (child.exitCode !== null) {
+          lastError = `process exited with code ${child.exitCode}`;
+          break;
+        }
         await client.dispose();
         return;
       }
@@ -63,7 +72,10 @@ async function waitForServerReady(baseURL: string, child: ChildProcess): Promise
   }
 
   await client.dispose();
-  throw new Error(`Neon server did not become ready at ${baseURL}. ${lastError}`);
+  throw new Error(
+    `Neon server did not become ready at ${baseURL}. ${lastError}. ` +
+      "If the port is already in use, stop the old process or use a different port.",
+  );
 }
 
 async function stopChild(child: ChildProcess): Promise<void> {

@@ -3,7 +3,8 @@ import { NeonServer, startNeonServer } from "./helpers/server";
 
 const PORT_SUCCESS = 8080;
 const PORT_FAILURE = 8081;
-const PORT_TIMER_RACE = 8082;
+// Avoid 8082 — a stale process from earlier runs can answer health checks without test env.
+const PORT_TIMER_RACE = 41882;
 
 test.describe("MVP-E success-flow journeys (E-E1, E-E2, E-E5, E-E6, E-E7, E-E8)", () => {
   let server: NeonServer;
@@ -159,24 +160,19 @@ test.describe("MVP-E failure journey (E-E3)", () => {
     }
   });
 
-  test("E-E3: full 3x3 method exhaustion reaches PAYMENT_FAILED", async ({ page }) => {
+  test("E-E3: three consecutive failures reach PAYMENT_FAILED", async ({ page }) => {
     await page.goto(`${server.baseURL}/`);
     await startOrder(page, 0);
     await selectSeatAndProceed(page, "1B");
 
-    const codes = ["11111", "22222", "33333"];
-    for (let i = 0; i < codes.length; i++) {
-      if (i > 0) {
-        await page.locator("#payment-code").fill(codes[i]);
-        await expect(page.getByRole("button", { name: "Submit payment" })).toBeEnabled();
-      }
-      await exhaustPaymentCode(page, codes[i]);
-    }
+    await failPaymentConsecutively(page, "11111");
 
     await expect(page.locator("#order-status")).toHaveText("PAYMENT_FAILED", { timeout: 15000 });
-    await expect(page.locator("#error")).toContainText(/All payment methods failed/i);
+    await expect(page.locator("#error")).toContainText(/maximum payment retries/i);
+    await expect(page.locator("#payment-panel")).toHaveClass(/hidden/);
     await expect(page.evaluate(() => localStorage.getItem("neon_order_id"))).resolves.toBeNull();
-    await expect(page.locator("#methods-used")).toContainText("3 / 3");
+    await expect(page.locator("#attempts-used")).toHaveText("3 / 3 attempts used");
+    await expect(page.locator("#payment-events")).toContainText(/attempts exhausted/i);
   });
 });
 
@@ -187,9 +183,10 @@ test.describe("MVP-E timer race journey (E-E4)", () => {
     server = await startNeonServer({
       port: PORT_TIMER_RACE,
       env: {
-        HOLD_DURATION: "2s",
+        // HoldDuration() ignores values below 5s (see internal/workflow/booking/config.go).
+        HOLD_DURATION: "6s",
         PAYMENT_NEVER_FAIL: "1",
-        PAYMENT_VALIDATION_DELAY: "5s",
+        PAYMENT_VALIDATION_DELAY: "8s",
       },
     });
   });
@@ -205,12 +202,35 @@ test.describe("MVP-E timer race journey (E-E4)", () => {
     await startOrder(page, 0);
     await selectSeatAndProceed(page, "1B");
 
+    const orderID = new URL(page.url()).searchParams.get("order_id");
+    expect(orderID).toBeTruthy();
+
+    const holdTimer = await readTimerSeconds(page, "#timer-display");
+    expect(holdTimer).toBeGreaterThan(0);
+    expect(holdTimer).toBeLessThanOrEqual(10);
+
     await page.locator("#payment-code").fill("12345");
     await page.getByRole("button", { name: "Submit payment" }).click();
-    await page.waitForTimeout(6500);
+
+    await expect
+      .poll(
+        async () => {
+          const res = await page.request.get(
+            `${server.baseURL}/api/v1/orders/${encodeURIComponent(orderID!)}`,
+          );
+          if (!res.ok()) {
+            return "";
+          }
+          const body = (await res.json()) as { status?: string };
+          return body.status ?? "";
+        },
+        { timeout: 20000 },
+      )
+      .toBe("EXPIRED");
+
     await page.reload();
 
-    await expect(page.locator("#order-status")).toHaveText("EXPIRED", { timeout: 20000 });
+    await expect(page.locator("#order-status")).toHaveText("EXPIRED");
     await expect(page.locator("#error")).toContainText("hold expired");
     await expect(page.locator("#payment-events")).toContainText("Payment rejected (timer expired)");
   });
@@ -239,22 +259,24 @@ async function clickAnyAvailableSeat(page: Page): Promise<string> {
   return label.split(" ")[0];
 }
 
-async function exhaustPaymentCode(page: Page, code: string): Promise<void> {
+async function failPaymentConsecutively(page: Page, code: string): Promise<void> {
   const codeInput = page.locator("#payment-code");
   const submit = page.getByRole("button", { name: "Submit payment" });
 
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 1; attempt <= 3; attempt++) {
     await codeInput.fill(code);
     await expect(submit).toBeEnabled({ timeout: 10000 });
     await submit.click();
-    if (attempt < 2) {
-      await expect(page.locator("#payment-feedback")).toContainText(/failed/i, { timeout: 10000 });
+    if (attempt < 3) {
+      await expect(page.locator("#attempts-used")).toHaveText(
+        `${attempt} / 3 attempts used`,
+        { timeout: 10000 },
+      );
+      await expect(page.locator("#payment-feedback")).toContainText(/failed/i, {
+        timeout: 10000,
+      });
     }
   }
-
-  await expect(page.locator("#attempts-used")).toHaveText("0 / 3 on current code");
-  await expect(submit).toBeDisabled();
-  await expect(page.locator("#payment-feedback")).toContainText(/exhausted/i);
 }
 
 async function readTimerSeconds(page: Page, selector: string): Promise<number> {

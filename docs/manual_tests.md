@@ -48,8 +48,8 @@ Restart `go run ./cmd/api` after changing env vars.
 | Step | Action | Expected |
 |------|--------|----------|
 | 1 | Open http://localhost:8080 | Flight list shows **NA4821** and **NA1954** |
-| 2 | Click flight **NA4821** | Seat map loads; order created (`localStorage`); timer ~15:00 starts |
-| 3 | Click seat **1A** | Status **SEATS_HELD**; timer refreshes ~15:00 |
+| 2 | Click flight **NA4821** | Seat map loads; order created (`localStorage`); status **CREATED**; hold timer shows **—** |
+| 3 | Click seat **1A** | Status **SEATS_HELD**; hold timer starts ~15:00 |
 | 4 | Click **Proceed to payment** | Payment page opens |
 | 5 | Enter `12345`, **Submit payment** | Status **CONFIRMED**; confirmation message |
 | 6 | **View seat map** | Seat **1A** is **BOOKED** (grayscale) |
@@ -184,7 +184,7 @@ curl.exe -s -X POST "$base/orders/$orderId/payment" -H "Content-Type: applicatio
 
 **Expected:** First two responses **SEATS_HELD** with failure events; third **CONFIRMED** with ≥3 `payment_events`.
 
-### 3.10 Per-method exhaustion (negative, test hook)
+### 3.10 Payment exhaustion (negative, test hook)
 
 Restart API with `$env:PAYMENT_ALWAYS_FAIL = "1"`, new order + hold, three payments on the same code:
 
@@ -194,7 +194,7 @@ Restart API with `$env:PAYMENT_ALWAYS_FAIL = "1"`, new order + hold, three payme
 }
 ```
 
-**Expected:** All three return HTTP **200** and **SEATS_HELD**. The first two have `methods_used: 0`; the third has `methods_used: 1` (code exhausted, new method required). Order stays active — terminal only after 3 codes × 3 failures (see §6.3 / `TestI_D1`).
+**Expected:** First two return HTTP **200** with **SEATS_HELD**; third returns **410** or order **PAYMENT_FAILED** with seats released (`TestI_D1`, `TestI_C6`).
 
 ### 3.11 Quick smoke script (Invoke-RestMethod)
 
@@ -229,24 +229,17 @@ When all are checked, confirm **MVP-C** in chat so **MVP-D** can start.
 
 Set `$env:PAYMENT_ALWAYS_FAIL = "1"` for failure flows, or `$env:PAYMENT_FAIL_UNTIL = "2"` for partial failures.
 
-### 6.1 UI — New payment method (switch codes mid-method)
+### 6.1 UI — Different code after failure (I-D9)
 
 1. Hold seats, open payment page.
-2. Submit code `11111` once with `PAYMENT_ALWAYS_FAIL=1` (fails).
-3. Enter a **different** code `22222` without clicking **Try new payment method**.
-4. **Expected:** Inline error / feedback; Submit stays disabled until you click **Try new payment method**.
-5. Click **Try new payment method**, enter `22222`, submit — failures reset to `0 / 3 on current code`.
+2. With `$env:PAYMENT_FAIL_UNTIL = "1"`, submit code `11111` once (fails).
+3. Enter a different code `22222` and submit again.
+4. **Expected:** Second attempt succeeds or fails normally; no extra UI step required to switch codes.
 
-### 6.2 UI — Different code rejected without new-method (U-D6)
+### 6.2 UI — Payment exhaustion (S-3 / E-E3)
 
-1. Submit code `11111` once so it fails (`PAYMENT_ALWAYS_FAIL=1`).
-2. Enter a different code `22222` and submit **without** clicking **Try new payment method**.
-3. **Expected:** Error feedback; order stays `SEATS_HELD`; same code can still be retried.
-
-### 6.3 UI — Method exhaustion (S-3 / E-E3)
-
-1. With `PAYMENT_ALWAYS_FAIL=1`, fail `11111` three times, then enter `22222` and fail three times, then `33333` three times.
-2. **Expected:** Status `PAYMENT_FAILED`; error *"All payment methods failed…"*; seats released; `localStorage` order cleared.
+1. With `PAYMENT_ALWAYS_FAIL=1`, submit the same or different codes until three consecutive failures.
+2. **Expected:** Status `PAYMENT_FAILED`; error mentions *maximum payment retries*; seats released; `localStorage` order cleared.
 
 ### 6.4 UI — Timer during payment (I-D4)
 
@@ -254,23 +247,12 @@ Set `$env:PAYMENT_ALWAYS_FAIL = "1"` for failure flows, or `$env:PAYMENT_FAIL_UN
 2. Submit payment and watch the hold timer during `AWAITING_PAYMENT`.
 3. **Expected:** Timer keeps counting down (never pauses).
 
-### 6.5 API — New method endpoint
+### 6.5 MVP-D sign-off checklist
 
-```powershell
-$base = "http://localhost:8080/api/v1"
-$o = Invoke-RestMethod -Method POST -Uri "$base/orders" -ContentType "application/json" -Body '{"flight_id":"NA4821"}'
-Invoke-RestMethod -Method PATCH -Uri "$base/orders/$($o.order_id)/seats" -ContentType "application/json" -Body '{"seat_ids":["1A"]}'
-Invoke-RestMethod -Method POST -Uri "$base/orders/$($o.order_id)/payment/new-method" -ContentType "application/json" -Body '{}'
-# → 400 if no payment attempts yet; 200 after first method with failures
-```
-
-### 6.6 MVP-D sign-off checklist
-
-- [ ] Explicit new-method before code switch (§6.1)
-- [ ] Different-code rejection without new-method (§6.2)
-- [ ] UI method exhaustion (§6.3)
+- [ ] Different code after failure (§6.1)
+- [ ] UI payment exhaustion (§6.2)
 - [ ] Timer visible during payment (§6.4)
-- [ ] `go test ./...` green (U-D1–U-D5, I-D1–I-D10)
+- [ ] `go test ./...` green (I-D1, I-D9, I-C6, E-E3)
 
 When all are checked, confirm **MVP-D** in chat so **MVP-E** can start.
 

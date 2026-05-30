@@ -5,7 +5,7 @@
 - `npm run test:e2e` — **17/17 PASS** (67s)
 - `go test ./... -count=1 -timeout 120s` — **PASS** (83s)
 
-**Verdict:** **PASS** — all testable requirements in [initial_requirements.md](initial_requirements.md) are covered by automated tests; documented mismatches are doc/UI polish only (Medium/Low).
+**Verdict:** **PASS** — all testable requirements in [initial_requirements.md](initial_requirements.md) are covered by automated tests. Open findings: QA-UI-1, QA-UI-3 (Low, optional polish).
 
 **Traceability source:** [docs/initial_requirements.md](initial_requirements.md) User Flow + Business Rules  
 **E2E suite:** [tests/e2e/](../tests/e2e/) (Playwright, 4 spec files + helpers)
@@ -61,14 +61,21 @@
 
 ## Mismatches
 
+### Open
+
 | ID | Severity | Requirement / doc | Observed behavior | Evidence |
 |----|----------|-------------------|---------------------|----------|
-| QA-DOC-1 | Medium | [README.md](../README.md) §Booking flow step 1: "creates an order **and starts a 15-minute hold timer**" | Timer starts on **first seat hold**, not flight select. `CREATED` has no timer. | E-E9 PASS; [initial_requirements.md](initial_requirements.md) L47; `TestU_B0` |
-| QA-DOC-2 | Medium | [README.md](../README.md) §Order states: `CREATED` = "timer running" | Implementation: no timer in `CREATED`. | E-E9; `TestU_B0_NoTimerInCreatedState` |
-| QA-DOC-3 | Medium | [manual_tests.md](manual_tests.md) §2.1 step 2: "timer ~15:00 starts" on flight click | Timer shows `—` until first seat selected. | E-E9 |
 | QA-UI-1 | Low | Real-time `AWAITING_PAYMENT` visible in UI during validation | UI polling interval is 5s (`ORDER_POLL_INTERVAL_MS`); status often jumps `SEATS_HELD` → `CONFIRMED` without displaying `AWAITING_PAYMENT`. Backend state is correct. | IR-4 uses API poll; manual §2.4 |
-| QA-UI-2 | Low | Inline error on invalid payment code submit | Submit button is **disabled** for non-5-digit input; `"Enter exactly 5 digits."` feedback only appears if submit handler runs (button enabled). | IR-2; [payment.js](../internal/web/static/js/payment.js) L85–96 |
 | QA-UI-3 | Low | `#payment-feedback` after failed attempt | Failure details appear in `#payment-events`; `#payment-feedback` may stay hidden after failed POST. | IR-3; E-E3 uses `#payment-events` |
+
+### Resolved / accepted
+
+| ID | Resolution | Evidence |
+|----|------------|----------|
+| QA-DOC-1 | **Resolved** — README updated: hold timer starts when **at least one seat** is selected, not on flight select. | E-E9; README §Booking flow |
+| QA-DOC-2 | **Resolved** — README updated: `CREATED` has **no timer** until first seat hold. | E-E9; README §Order states |
+| QA-DOC-3 | **Resolved** — `manual_tests.md` §2.1 updated: timer `—` after flight select; starts on first seat. | E-E9; manual_tests §2.1 |
+| QA-UI-2 | **Accepted** — disabling Submit for non-5-digit input is intended UX; no change required. | IR-2 |
 
 No **Critical** or **High** implementation gaps found against [initial_requirements.md](initial_requirements.md).
 
@@ -96,7 +103,6 @@ No **Critical** or **High** implementation gaps found against [initial_requireme
 
 ## Recommendations (optional, not blocking)
 
-1. Fix README + manual_tests timer-start wording (QA-DOC-1..3).
-2. Reduce `ORDER_POLL_INTERVAL_MS` on payment page or optimistically set `AWAITING_PAYMENT` on submit click (QA-UI-1).
-3. Show `#payment-feedback` on failed payment POST response (QA-UI-3).
-4. Add E2E to CI workflow when GitHub Actions is introduced.
+1. Reduce `ORDER_POLL_INTERVAL_MS` on payment page or optimistically set `AWAITING_PAYMENT` on submit click (QA-UI-1).
+2. Show `#payment-feedback` on failed payment POST response (QA-UI-3).
+3. Add E2E to CI workflow when GitHub Actions is introduced.

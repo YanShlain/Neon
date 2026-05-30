@@ -621,9 +621,18 @@ body {
 }
 
 .cabin-row .row-label {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.cabin-row .row-label:not(.row-label--end) {
   justify-content: flex-end;
   padding-right: 0.25rem;
-  width: 100%;
+}
+
+.cabin-row .row-label--end {
+  justify-content: flex-start;
+  padding-left: 0.25rem;
 }
 
 .cabin-row--col-labels .col-label {
@@ -669,17 +678,6 @@ body {
 
 .aisle-arrow--down {
   border-top: 6px solid #ef4444;
-}
-
-.cabin-lavatory {
-  width: 1.5rem;
-  height: 2.25rem;
-  border-radius: 0.35rem;
-  border: 1px solid #cbd5e1;
-  background:
-    linear-gradient(180deg, #e2e8f0 0%, #cbd5e1 100%),
-    radial-gradient(circle at 50% 38%, #94a3b8 0.22rem, transparent 0.24rem);
-  opacity: 0.85;
 }
 
 .seat-cell {
@@ -758,10 +756,6 @@ body {
     min-height: calc(2.25rem * var(--seat-scale, 0.88));
   }
 
-  .cabin-lavatory {
-    width: calc(1.5rem * var(--seat-scale, 0.88));
-    height: calc(2.25rem * var(--seat-scale, 0.88));
-  }
 }
 
 .panel-title {

@@ -12,8 +12,8 @@ Neon lets anonymous users book seats on one or more flights. Each flight has its
 
 ### Booking flow
 
-1. **Select a flight** — creates an order and starts a 15-minute hold timer.
-2. **Choose seats** — holds are applied per flight; the timer **resets to a full 15 minutes** on every seat change.
+1. **Select a flight** — creates an order in `CREATED` state (no hold timer yet).
+2. **Choose seats** — selecting at least one seat starts the 15-minute hold timer; the timer **resets to a full 15 minutes** on every seat change.
 3. **Pay** — submit a 5-digit code; validation runs with a 10-second timeout and a 15% simulated failure rate.
 4. **Confirm or fail** — successful payment moves seats from `HELD` to `BOOKED`; timer expiry or exhausted payment attempts release all held seats.
 
@@ -29,7 +29,7 @@ Neon lets anonymous users book seats on one or more flights. Each flight has its
 
 | State | Meaning |
 |-------|---------|
-| `CREATED` | Order started; timer running; no seats held yet |
+| `CREATED` | Order started; **no timer** until at least one seat is held |
 | `SEATS_HELD` | Seats held; timer running (refreshes on seat changes) |
 | `AWAITING_PAYMENT` | Payment validation in progress; timer still running |
 | `CONFIRMED` | Terminal success — seats booked |

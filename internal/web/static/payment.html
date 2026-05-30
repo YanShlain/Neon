@@ -10,7 +10,7 @@
   <div class="brand-banner">
     <div class="container brand-banner-inner">
       <div class="brand-banner-start">
-        <a href="/" class="back-link back-link--banner">← Flights</a>
+        <a id="banner-seats-link" href="#" class="back-link back-link--banner">← Change seats</a>
         <p class="order-status order-status--banner">Status: <span id="order-status">—</span></p>
       </div>
       <div class="brand-banner-center">
@@ -28,14 +28,13 @@
     <section class="panel order-panel" id="order-panel">
       <p id="held-seats" class="selection-summary">Held seats: —</p>
       <div class="payment-counters">
-        <span>Attempts on current code: <strong id="attempts-used">0 / 3</strong></span>
-        <span>Methods used: <strong id="methods-used">0 / 3</strong></span>
+        <span>Payment attempts: <strong id="attempts-used">0 / 3</strong></span>
       </div>
     </section>
 
     <section class="panel payment-panel" id="payment-panel">
       <h2 class="panel-title">Enter payment code</h2>
-      <p class="payment-hint">Use a 5-digit numeric code. You get up to 3 attempts per code and 3 different codes per order. After a code fails 3 times, use "Try new payment method" before entering a different code.</p>
+      <p class="payment-hint">Use a 5-digit numeric code. You get up to 3 payment attempts for this order.</p>
       <form id="payment-form" class="payment-form">
         <label for="payment-code">Payment code</label>
         <input
@@ -50,7 +49,6 @@
           required
         />
         <div class="payment-actions">
-          <button type="button" id="new-method-btn" class="btn btn-secondary">Try new payment method</button>
           <button type="submit" id="submit-btn" class="btn btn-primary">Submit payment</button>
         </div>
       </form>

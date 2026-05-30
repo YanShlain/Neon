@@ -16,6 +16,7 @@
   const confirmationPanel = document.getElementById("confirmation-panel");
   const confirmationMessage = document.getElementById("confirmation-message");
   const viewSeatsLink = document.getElementById("view-seats-link");
+  const bannerSeatsLink = document.getElementById("banner-seats-link");
   const paymentForm = document.getElementById("payment-form");
   const paymentCode = document.getElementById("payment-code");
   const paymentFeedback = document.getElementById("payment-feedback");
@@ -37,7 +38,11 @@
   if (flightIdEl) {
     flightIdEl.textContent = flightID;
   }
-  viewSeatsLink.href = `/seats?flight_id=${encodeURIComponent(flightID)}&order_id=${encodeURIComponent(orderID)}`;
+  const seatsPageURL = `/seats?flight_id=${encodeURIComponent(flightID)}&order_id=${encodeURIComponent(orderID)}`;
+  viewSeatsLink.href = seatsPageURL;
+  if (bannerSeatsLink) {
+    bannerSeatsLink.href = seatsPageURL;
+  }
 
   paymentForm.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -56,7 +61,8 @@
   async function bootstrap() {
     hideError(errorEl);
     try {
-      await loadOrder({ resetTimer: true });
+      const carriedTimer = takeCarriedHoldTimer();
+      await loadOrder({ carriedTimer });
       startLiveUpdates();
     } catch (err) {
       showError(errorEl, err.message);
@@ -90,18 +96,16 @@
     paymentCode.disabled = order.status !== "SEATS_HELD" || exhausted;
   }
 
-  function renderOrder(order, { resetTimer = false } = {}) {
+  function renderOrder(order, { resetTimer = false, carriedTimer = 0 } = {}) {
     const prev = latestOrder;
     latestOrder = order;
-    const signatureBefore = prev
-      ? orderSeatsSignature(prev.status, prev.held_seat_ids)
-      : "";
-    const signatureAfter = orderSeatsSignature(order.status, order.held_seat_ids);
+    const seatsBefore = prev ? heldSeatsSignature(prev.held_seat_ids) : "";
+    const seatsAfter = heldSeatsSignature(order.held_seat_ids);
+    const seatsChanged = seatsBefore !== seatsAfter;
+    const resumeFromSeatsPage = carriedTimer > 0 && !prev;
     const forceTimer =
-      resetTimer ||
-      !prev ||
-      signatureBefore !== signatureAfter ||
-      isTerminalStatus(order.status);
+      !resumeFromSeatsPage &&
+      (resetTimer || !prev || seatsChanged);
 
     const attemptsUsed = failuresCount(order);
 
@@ -118,11 +122,11 @@
       updateTimerDisplay(timerDisplay, 0, false);
     } else {
       const showTimer = shouldShowHoldTimer(order);
-      timerSeconds = reconcileTimerSeconds(
-        timerSeconds,
-        effectiveTimerSeconds(order),
-        { force: forceTimer }
-      );
+      const serverTimer = effectiveTimerSeconds(order);
+      const localBase = resumeFromSeatsPage ? carriedTimer : timerSeconds;
+      timerSeconds = reconcileTimerSeconds(localBase, serverTimer, {
+        force: forceTimer && !resumeFromSeatsPage,
+      });
       if (forceTimer) {
         restartTimer(showTimer);
       } else {
